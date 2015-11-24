@@ -9,6 +9,7 @@ textb="\
 \      field { } delay[10];\n\
 \   } delay[2];\n\
 \   delay->arr_prop = 4;\n\
+\   delay[0]->other_prop = false;\n\
 \};"
 
 

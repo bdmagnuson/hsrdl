@@ -1,8 +1,46 @@
+module Props (
+       PropRHS(..)
+     , CompType (..)
+     , Identifier
+     , Array(..)
+     , ElemPath
+     , EnumDef
+     , PropType(..)
+     , Property(..)
+     , defDefs
+     , PropDefs
+     , getTypeString
+     ) where
 
-import Parser (Identifier, Array)
 import qualified Data.Map.Strict as M
 
+type Identifier = String
 type ElemPath = [(Identifier, Maybe Array)]
+
+data Array =
+     ArrWidth {
+       width :: Integer
+     }
+   | ArrLR {
+       left :: Integer,
+       right :: Integer
+     } deriving (Show,Eq)
+
+data CompType =
+     Addrmap
+   | Regfile
+   | Reg
+   | Field
+   | Signal
+   | Array deriving (Ord,Eq)
+
+instance Show (CompType) where
+   show Addrmap = "addrmap"
+   show Regfile = "regfile"
+   show Reg     = "reg"
+   show Field   = "field"
+   show Signal  = "signal"
+   show Array   = "array"
 
 data PropType =
      PropLitT
@@ -10,7 +48,14 @@ data PropType =
    | PropBoolT
    | PropRefT
    | PropPathT
-   | PropEnumT EnumDef deriving (Show)
+   | PropEnumT EnumDef deriving (Show,Eq)
+
+getTypeString (PropLit  _)   = "string"
+getTypeString (PropNum  _)   = "number"
+getTypeString (PropBool _)   = "boolean"
+getTypeString (PropRef  _ _) = "property reference"
+getTypeString (PropPath _)   = "component path"
+getTypeString (PropEnum _ _) = "enumeration"
 
 data PropRHS =
      PropLit  String
@@ -18,24 +63,19 @@ data PropRHS =
    | PropBool Bool
    | PropRef  ElemPath Identifier
    | PropPath ElemPath
-   | PropEnum EnumDef Identifier deriving (Show)
+   | PropEnum EnumDef Identifier deriving (Show,Eq)
 
 data Property = Property {
    ptype    :: PropType,
    pdefault :: Maybe PropRHS
-} deriving (Show)
+} deriving (Show,Eq)
 
-data PropDefs = PropDefs {
-   field   :: M.Map Identifier Property,
-   reg     :: M.Map Identifier Property,
-   regfile :: M.Map Identifier Property,
-   addrmap :: M.Map Identifier Property
-} deriving (Show)
+type PropDefs = M.Map CompType (M.Map Identifier Property)
 
 data EnumDef = EnumDef {
    name   :: String,
    values :: M.Map Identifier Integer
-} deriving (Show)
+} deriving (Show,Eq)
 
 accessType = EnumDef "access_type" (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na", 4)])
 
@@ -68,18 +108,83 @@ p_decrsaturate  = ("decrsaturate",  defNothing PropNumT)
 p_incrthreshold = ("incrthreshold", defNothing PropNumT)
 p_decrthreshold = ("decrthreshold", defNothing PropNumT)
 
-propDefs = PropDefs {
-     field = M.fromList [
-       p_we, p_hw, p_sw, p_name, p_desc, p_reset, p_counter, p_rclr, p_rset, p_hwclr
-     , p_woclr, p_woset, p_wel, p_swacc, p_swmod, p_singlepulse, p_incrvalue
-     , p_decrvalue, p_incrsaturate, p_decrsaturate, p_incrthreshold, p_decrthreshold]
-   , reg  = M.fromList [
-      p_desc, p_name]
-   , regfile = M.fromList [
-      p_desc, p_name]
-   , addrmap = M.fromList [
-      p_desc, p_name]
-}
+--defDefs = PropDefs {
+--   field   = M.fromList [ p_we
+--                        , p_hw
+--                        , p_sw
+--                        , p_name
+--                        , p_desc
+--                        , p_reset
+--                        , p_counter
+--                        , p_rclr
+--                        , p_rset
+--                        , p_hwclr
+--                        , p_woclr
+--                        , p_woset
+--                        , p_wel
+--                        , p_swacc
+--                        , p_swmod
+--                        , p_singlepulse
+--                        , p_incrvalue
+--                        , p_decrvalue
+--                        , p_incrsaturate
+--                        , p_decrsaturate
+--                        , p_incrthreshold
+--                        , p_decrthreshold
+--                        ],
+--
+--   reg     = M.fromList [ p_desc
+--                        , p_name
+--                        ],
+--
+--   regfile = M.fromList [ p_desc
+--                        , p_name
+--                        ],
+--
+--   addrmap = M.fromList [ p_desc
+--                        , p_name
+--                        ]
+--}
+
+
+
+defDefs = M.fromList [
+   (Field,   M.fromList [ p_we
+                          , p_hw
+                          , p_sw
+                          , p_name
+                          , p_desc
+                          , p_reset
+                          , p_counter
+                          , p_rclr
+                          , p_rset
+                          , p_hwclr
+                          , p_woclr
+                          , p_woset
+                          , p_wel
+                          , p_swacc
+                          , p_swmod
+                          , p_singlepulse
+                          , p_incrvalue
+                          , p_decrvalue
+                          , p_incrsaturate
+                          , p_decrsaturate
+                          , p_incrthreshold
+                          , p_decrthreshold
+                          ]),
+
+   (Reg,     M.fromList [ p_desc
+                          , p_name
+                          ]),
+
+   (Regfile, M.fromList [ p_desc
+                          , p_name
+                          ]),
+
+   (Addrmap, M.fromList [ p_desc
+                          , p_name
+                          ])]
+
 
 
 
