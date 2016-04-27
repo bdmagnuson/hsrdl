@@ -1,53 +1,32 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Parser (
-       Expr (..)
+       ExprF (..)
+     , Expr
      , hsrdlParseString
      , hsrdlParseFile
      , Alignment
+     , rws
      ) where
 
-import System.IO
-import Debug.Trace
-
-import Data.Maybe (fromMaybe)
 import Control.Monad
-import Control.Monad.State
-import Control.Monad.Identity
-import Control.Lens hiding (noneOf)
+import Control.Comonad
+import Control.Comonad.Cofree
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.String
 import Text.Megaparsec.Perm
 import qualified Text.Megaparsec.Lexer as L
-import qualified Data.Map.Strict as M
 
 import Props
 
-data ParseState = ParseState {
-   _cdefCount :: Int,
-   _propDefs  :: PropDefs,
-   _currentComp :: CompType
-}
-
-makeLenses ''ParseState
-
-type MyParser = StateT ParseState Parser
-
-sc :: MyParser ()
 sc = L.space (void spaceChar) lineCmnt blockCmnt
   where lineCmnt  = L.skipLineComment "//"
         blockCmnt = L.skipBlockComment "/*" "*/"
-
-lexeme :: MyParser a -> MyParser a
-lexeme = L.lexeme sc
-
-symbol :: String -> MyParser String
-symbol = L.symbol sc
-
-braces :: MyParser a -> MyParser a
-braces = between lbrace rbrace
 
 lbrace = symbol "{"
 rbrace = symbol "}"
@@ -59,51 +38,96 @@ equal  = symbol "="
 pipe   = symbol "|"
 dquote = symbol "\""
 
-rword :: String -> MyParser ()
+lexeme p = do
+   l   <- L.lexeme sc p
+   return $ l
+
+identifier = lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
+
+parseIdentifier = do
+    pos <- getPosition
+    id  <- identifier
+    return $ pos :< (Identifier id)
+
+symbol = L.symbol sc
 rword w = string w *> notFollowedBy alphaNumChar *> sc
 
-identifier = do
-   pos <- getPosition
-   id <- lexeme (p >>= check)
-   return $ id
-   where p       = (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
---         check x = if x `elem` rws
---                   then fail $ "keyword " ++ show x ++ " cannot be an identifier"
---                   else return x
-         check x = return x
+braces = between lbrace rbrace
 
-data Expr =
+data ExprF a =
      CompDef   {
         ctype :: CompType,
-        dd    :: Maybe Identifier,
-        expr  :: [Expr],
-        insts :: [Expr]
+        dd    :: Maybe a,
+        expr  :: [a],
+        insts :: [a]
      }
-   | ExpCompInst    Identifier [Expr]
-   | CompInst       Identifier (Maybe Array) [Alignment]
-   | DefPropAssign  Identifier
-   | ExpPropAssign  Identifier PropRHS
-   | PostPropAssign ElemPath Identifier PropRHS deriving (Show)
+   | Identifier {
+        id    :: String
+     }
+   | PathElem {
+        name  :: a,
+        arr   :: Maybe Array
+     }
+   | ExpCompInst {
+        name  :: a,
+        comp  :: [a]
+     }
+   | CompInst {
+        compp :: a,
+        arr   :: Maybe Array,
+        align :: [Alignment]
+     }
+   | PropDef {
+        name     :: a,
+        propType :: PropType,
+        ctypes   :: [CompType],
+        value    :: Maybe PropRHS
+     }
+   | PostPropAssign {
+        path  :: [a],
+        prop  :: a,
+        rhs   :: PropRHS
+     }
+   | PropAssign {
+        prop  :: a,
+        rhs   :: PropRHS
+     }
+   | TopExpr {
+        exprs :: [a]
+     }
+   deriving (Show, Functor, Traversable, Foldable)
 
+type Expr a = Cofree ExprF a
 
 data Alignment =
      At Integer
    | Mod Integer
    | Stride Integer deriving (Show)
 
-parseSrdl = many (try parsePropDef >> parseExpr)
+parseTop = do
+    pos <- getPosition
+    expr <- many parseTopExpr
+    return $ pos :< TopExpr expr
 
-parseExpr = parseCompDef <|> parsePropAssign <|> parseExpCompInst
+parseTopExpr =
+       parseCompDef
+   <|> parsePropAssign
+   <|> parsePropDef
+   <|> parseExpCompInst
+
+parseExpr =
+       parseCompDef
+   <|> parsePropAssign
+   <|> parseExpCompInst
 
 parseCompDef = do
-   cnt   <- cdefCount %%= (\x -> (x, x + 1))
+   pos   <- getPosition
    cType <- parseCompType
-   currentComp .= cType
-   name  <- option ("__anon" ++ (show cnt)) identifier
+   name  <- optional parseIdentifier
    expr  <- braces $ many parseExpr
    anon  <- (sepBy parseCompInst comma)
    semi
-   return $ CompDef cType (Just name) expr anon
+   return $ pos :< CompDef cType name expr anon
 
 parseCompType =
        parseRsvdRet "addrmap" Addrmap
@@ -117,15 +141,17 @@ parseRsvdRet a b = do
    return b
 
 parseExpCompInst = do
-   inst <- identifier
+   pos  <- getPosition
+   inst <- parseIdentifier
    elem <- sepBy parseCompInst comma
    semi
-   return $ ExpCompInst inst elem
+   return $ pos :< ExpCompInst inst elem
 
 parseCompInst = do
-   name <- identifier
+   pos  <- getPosition
+   name <- pathElem
    arr  <- optional parseArray
-   return $ CompInst name arr []
+   return $ pos :< CompInst name arr []
 
 parseArray = try parseArray1 <|> parseArray2
 parseArray1 = do
@@ -140,46 +166,36 @@ parseArray2 = do
    symbol "]"
    return $ ArrLR {left = left, right = right}
 
-parsePropAssign =
-       try parseDefPropAssign
-   <|> try parseExpPropAssign
-   <|> try parsePostPropAssign
-
-checkAssign :: Identifier -> PropRHS -> MyParser ()
-checkAssign prop rhs = do
-   comp <- use currentComp
-   def <- use $ propDefs . at comp . non M.empty . at prop
-   case def of
-      Nothing -> unexpected ((show prop) ++ " is not a valid property for component type " ++ (show comp))
-      Just (Property ptype _) -> case checktype ptype (Just rhs) of
-                                    False -> fail ("Type mismatch: Found " ++ getTypeString rhs ++ " expected " ++ (show ptype))
-                                    True -> trace "success" (return ())
-
 pathElem = do
-   id <- identifier
-   name <- optional parseArray1
-   return (id, name)
+   pos <- getPosition
+   id  <- parseIdentifier
+   arr <- optional parseArray1
+   return $ pos :< PathElem id arr
+
+parsePropAssign = try parseDefPropAssign <|> try parseExpPropAssign <|> try parsePostPropAssign
 
 parseDefPropAssign = do
-   prop <- identifier
-   checkAssign prop (PropBool True)
+   pos <- getPosition
+   prop <- parseIdentifier
    semi
-   return $ DefPropAssign prop
+   return $ pos :< PropAssign prop (PropBool True)
 
 parseExpPropAssign = do
-   lhs <- identifier
+   pos <- getPosition
+   prop <- parseIdentifier
    equal
    rhs  <- parseRHS
    semi
-   return $ ExpPropAssign lhs rhs
+   return $ pos :< PropAssign prop rhs
 
 parsePostPropAssign = do
+   pos <- getPosition
    path <- pathElem `sepBy` dot
-   prop <- dref *> identifier
+   prop <- dref *> parseIdentifier
    equal
    rhs <- parseRHS
    semi
-   return $ PostPropAssign path prop rhs
+   return $ pos :< PostPropAssign path prop rhs
 
 parsePropDefBody = makePermParser $ (,,) <$$> p1 <||> p2 <|?> (Nothing, p3)
    where
@@ -194,22 +210,17 @@ parsePropDefBody = makePermParser $ (,,) <$$> p1 <||> p2 <|?> (Nothing, p3)
          <|> parseRsvdRet "boolean" PropBoolT
          <|> parseRsvdRet "ref"     PropRefT
 
-checktype :: PropType -> Maybe PropRHS -> Bool
-checktype _ Nothing = True
-checktype PropNumT  (Just (PropNum  _)) = True
-checktype PropLitT  (Just (PropLit  _)) = True
-checktype PropBoolT (Just (PropBool _)) = True
-checktype PropRefT  (Just (PropRef  _ _)) = True
-checktype _ _ = False
-
 parsePropDef = do
+   pos <- getPosition
    rword "property"
-   id <- identifier
+   id <- parseIdentifier
    (t, c, d) <- braces parsePropDefBody
    semi
-   if checktype t d
-      then propDefs %= foldl1 (.) (map (\x y -> y & ix x . at id .~ Just (Property t d)) c)
-      else fail "default not of specified type"
+   return $ pos :< PropDef id t c d
+
+--   if checktype t d
+--      then propDefs %= foldl1 (.) (map (\x y -> y & ix x . at id .~ Just (Property t d)) c)
+--      else fail "default not of specified type"
 
 
 parseRHS =
@@ -242,14 +253,10 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-parseString p s = parse (evalStateT p 0) "file" s
 
-initState = ParseState {
-   _cdefCount   = 0,
-   _propDefs    = defDefs,
-   _currentComp = Addrmap
-}
+parseSrdl = parseTop
+parseString p s = parse p "file" s
 
-hsrdlParseString s = parse (evalStateT parseSrdl initState) "file" s
-hsrdlParseFile file = runParser (evalStateT (sc *> parseSrdl) initState) file <$> readFile file
+hsrdlParseString s = parse parseSrdl "file" s
+hsrdlParseFile file = runParser (sc *> parseSrdl) file <$> readFile file
 

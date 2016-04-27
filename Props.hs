@@ -10,6 +10,8 @@ module Props (
      , defDefs
      , PropDefs
      , getTypeString
+     , getPropType
+     , checktype
      ) where
 
 import qualified Data.Map.Strict as M
@@ -56,6 +58,14 @@ getTypeString (PropBool _)   = "boolean"
 getTypeString (PropRef  _ _) = "property reference"
 getTypeString (PropPath _)   = "component path"
 getTypeString (PropEnum _ _) = "enumeration"
+
+checktype :: Maybe PropType -> PropRHS -> Bool
+checktype Nothing _  = False
+checktype (Just PropNumT)  (PropNum  _) = True
+checktype (Just PropLitT)  (PropLit  _) = True
+checktype (Just PropBoolT) (PropBool _) = True
+checktype (Just PropRefT)  (PropRef  _ _) = True
+checktype _ _ = False
 
 data PropRHS =
      PropLit  String
@@ -107,6 +117,12 @@ p_incrsaturate  = ("incrsaturate",  defNothing PropNumT)
 p_decrsaturate  = ("decrsaturate",  defNothing PropNumT)
 p_incrthreshold = ("incrthreshold", defNothing PropNumT)
 p_decrthreshold = ("decrthreshold", defNothing PropNumT)
+
+getPropType :: String -> Maybe PropType
+getPropType p = do
+    compProps <- M.lookup Field defDefs
+    prop <- M.lookup p compProps
+    return $ ptype prop
 
 --defDefs = PropDefs {
 --   field   = M.fromList [ p_we
