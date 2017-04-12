@@ -124,46 +124,6 @@ getPropType p = do
     prop <- M.lookup p compProps
     return $ ptype prop
 
---defDefs = PropDefs {
---   field   = M.fromList [ p_we
---                        , p_hw
---                        , p_sw
---                        , p_name
---                        , p_desc
---                        , p_reset
---                        , p_counter
---                        , p_rclr
---                        , p_rset
---                        , p_hwclr
---                        , p_woclr
---                        , p_woset
---                        , p_wel
---                        , p_swacc
---                        , p_swmod
---                        , p_singlepulse
---                        , p_incrvalue
---                        , p_decrvalue
---                        , p_incrsaturate
---                        , p_decrsaturate
---                        , p_incrthreshold
---                        , p_decrthreshold
---                        ],
---
---   reg     = M.fromList [ p_desc
---                        , p_name
---                        ],
---
---   regfile = M.fromList [ p_desc
---                        , p_name
---                        ],
---
---   addrmap = M.fromList [ p_desc
---                        , p_name
---                        ]
---}
-
-
-
 defDefs = M.fromList [
    (Field,   M.fromList [ p_we
                           , p_hw

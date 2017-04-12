@@ -99,6 +99,22 @@ data EExpr a =
         _eprops  :: M.Map Identifier PropRHS
      } deriving (Show)
 
+
+type Unannotated = Fix ExprF
+type Annotated a = Cofree ExprF a
+
+runUnannotated :: Functor f => (f x -> x) -> Fix f -> x
+runUnannotated phi (Fix f) = phi (fmap (runUnannotated phi) f)
+
+runAnnotated :: Functor f => (f x -> x) -> Cofree f a -> x
+runAnnotated phi (_ :< f) = phi (fmap (runAnnotated phi) f)
+
+change (Identifier _) = Identifier "foo"
+change x = x
+
+unfix :: Fix f -> f (Fix f)
+unfix (Fix f) = f
+
 --
 --
 --type ElabState = Int
@@ -113,24 +129,24 @@ data EExpr a =
 --                     _eprops  = M.empty
 --                   }
 --
-inst d@(_ :< CompDef _ (Just n) _ _) e = do
-    addSymbol n d
-    return e
-
-inst d@(CompInst name Nothing align) e = do
-    def <- lookupSym def
-    inst (lookupSym a) name 
-
-elab d@(_ :< PropDef n t c v) = do
-
-
-
-
-
-
-
-
-
-
-
-
+--inst d@(_ :< CompDef _ (Just n) _ _) e = do
+--    addSymbol n d
+--    return e
+--
+--inst d@(CompInst name Nothing align) e = do
+--    def <- lookupSym def
+--    inst (lookupSym a) name 
+--
+--elab d@(_ :< PropDef n t c v) = do
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--

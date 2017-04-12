@@ -10,4 +10,10 @@ addrmap test {
 
       field {} f1;
    } reg1;
+
+   reg {
+      userprop = 3;
+
+      field {} f1;
+   } reg2;
 };

@@ -8,10 +8,9 @@
 module Parser (
        ExprF (..)
      , Expr
-     , hsrdlParseString
-     , hsrdlParseFile
      , Alignment
      , rws
+     , SourcePos
      ) where
 
 import Control.Monad
@@ -21,6 +20,10 @@ import Text.Megaparsec hiding (State)
 import Text.Megaparsec.String
 import Text.Megaparsec.Perm
 import qualified Text.Megaparsec.Lexer as L
+import qualified Data.Map.Strict as M
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Class
 
 import Props
 
@@ -54,26 +57,33 @@ rword w = string w *> notFollowedBy alphaNumChar *> sc
 
 braces = between lbrace rbrace
 
+data SymTab a = SymTab Int (M.Map String a)
+
+data ParseLoc =
+      TOP
+    | CHILD
+    | ANON_DEF
+
+data ParseState = ParseState {
+    loc :: ParseLoc,
+    nam :: String,
+    anon_idx :: Int
+}
+
+type SrdlParser = ReaderT (SymTab Int) (StateT ParseState Parser)
+
 data ExprF a =
      CompDef   {
         ctype :: CompType,
-        dd    :: Maybe a,
-        expr  :: [a],
-        insts :: [a]
+        dd    :: a,
+        expr  :: [a]
      }
    | Identifier {
         id    :: String
      }
-   | PathElem {
-        name  :: a,
-        arr   :: Maybe Array
-     }
-   | ExpCompInst {
-        name  :: a,
-        comp  :: [a]
-     }
    | CompInst {
-        compp :: a,
+        def   :: String,
+        name :: a,
         arr   :: Maybe Array,
         align :: [Alignment]
      }
@@ -83,14 +93,14 @@ data ExprF a =
         ctypes   :: [CompType],
         value    :: Maybe PropRHS
      }
-   | PostPropAssign {
+   | PropAssign {
         path  :: [a],
         prop  :: a,
         rhs   :: PropRHS
      }
-   | PropAssign {
-        prop  :: a,
-        rhs   :: PropRHS
+   | PathElem {
+        name  :: a,
+        arr   :: Maybe Array
      }
    | TopExpr {
         exprs :: [a]
@@ -106,28 +116,43 @@ data Alignment =
 
 parseTop = do
     pos <- getPosition
-    expr <- many parseTopExpr
+    expr <- many parseExpr
     return $ pos :< TopExpr expr
 
-parseTopExpr =
-       parseCompDef
-   <|> parsePropAssign
-   <|> parsePropDef
-   <|> parseExpCompInst
+parseExpr :: SrdlParser (Expr SourcePos)
+parseExpr = do
+   st <- lift get
+   case (loc st) of
+      TOP ->    parseCompDef
+            <|> parsePropAssign
+            <|> parsePropDef
+            <|> parseExpCompInst
+      ANON_DEF -> parseCompInst <* (choice [c, s])
+        where
+            s = do
+                a <- semi
+                lift (modify (\s -> s {loc = CHILD}))
+                return a
+            c = comma
+      CHILD ->
+            parseCompDef
+        <|> parsePropAssign
+        <|> parseExpCompInst
 
-parseExpr =
-       parseCompDef
-   <|> parsePropAssign
-   <|> parseExpCompInst
+parseCompName = do
+    pos <- getPosition
+    parseIdentifier <|> do
+      idx <- lift get
+      lift (modify (\s -> s {anon_idx = anon_idx s + 1}))
+      return $ pos :< Identifier ("__anon_def" ++ (show $ anon_idx idx))
 
 parseCompDef = do
    pos   <- getPosition
    cType <- parseCompType
-   name  <- optional parseIdentifier
+   name  <- parseCompName
    expr  <- braces $ many parseExpr
-   anon  <- (sepBy parseCompInst comma)
-   semi
-   return $ pos :< CompDef cType name expr anon
+   lift (modify $ \s -> s { loc = ANON_DEF, nam = extractID name })
+   return $ pos :< CompDef cType name expr
 
 parseCompType =
        parseRsvdRet "addrmap" Addrmap
@@ -140,18 +165,20 @@ parseRsvdRet a b = do
    try (rword a)
    return b
 
+extractID (_ :< Identifier i) = i
+
 parseExpCompInst = do
    pos  <- getPosition
    inst <- parseIdentifier
-   elem <- sepBy parseCompInst comma
-   semi
-   return $ pos :< ExpCompInst inst elem
+   lift (modify $ \s -> s { loc = ANON_DEF, nam = extractID inst })
+   parseExpr
 
 parseCompInst = do
+   s <- lift get
    pos  <- getPosition
-   name <- pathElem
-   arr  <- optional parseArray
-   return $ pos :< CompInst name arr []
+   name <- parseIdentifier
+   arr  <- optional parseArray1
+   return $ pos :< (CompInst (nam s) name arr [])
 
 parseArray = try parseArray1 <|> parseArray2
 parseArray1 = do
@@ -178,7 +205,7 @@ parseDefPropAssign = do
    pos <- getPosition
    prop <- parseIdentifier
    semi
-   return $ pos :< PropAssign prop (PropBool True)
+   return $ pos :< PropAssign [] prop (PropBool True)
 
 parseExpPropAssign = do
    pos <- getPosition
@@ -186,7 +213,7 @@ parseExpPropAssign = do
    equal
    rhs  <- parseRHS
    semi
-   return $ pos :< PropAssign prop rhs
+   return $ pos :< PropAssign [] prop rhs
 
 parsePostPropAssign = do
    pos <- getPosition
@@ -195,7 +222,7 @@ parsePostPropAssign = do
    equal
    rhs <- parseRHS
    semi
-   return $ pos :< PostPropAssign path prop rhs
+   return $ pos :< PropAssign path prop rhs
 
 parsePropDefBody = makePermParser $ (,,) <$$> p1 <||> p2 <|?> (Nothing, p3)
    where
@@ -217,10 +244,6 @@ parsePropDef = do
    (t, c, d) <- braces parsePropDefBody
    semi
    return $ pos :< PropDef id t c d
-
---   if checktype t d
---      then propDefs %= foldl1 (.) (map (\x y -> y & ix x . at id .~ Just (Property t d)) c)
---      else fail "default not of specified type"
 
 
 parseRHS =
@@ -253,10 +276,9 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
+pp = evalStateT (runReaderT parseTop (SymTab 0 M.empty)) (ParseState TOP "" 0)
 
-parseSrdl = parseTop
-parseString p s = parse p "file" s
+hsrdlParseFile file = runParser pp file <$> readFile file
 
-hsrdlParseString s = parse parseSrdl "file" s
-hsrdlParseFile file = runParser (sc *> parseSrdl) file <$> readFile file
-
+--parseString p s = parse p "file" s
+--hsrdlParseString s = parse parseSrdl "file" s
