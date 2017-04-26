@@ -6,12 +6,12 @@
 {-# LANGUAGE RankNTypes #-}
 
 module Parser (
-       ExprF (..)
-     , Expr
-     , Alignment
-     , rws
+       rws
      , SourcePos
+     , hsrdlParseFile
      ) where
+
+import GHC.IO
 
 import Control.Monad
 import Control.Comonad
@@ -26,6 +26,23 @@ import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
 
 import Props
+import Types
+import qualified SymbolTable2 as SA
+
+data ParseLoc =
+      TOP
+    | CHILD
+    | ANON_DEF deriving (Show)
+
+data ParseState = ParseState {
+    loc      :: ParseLoc,
+    nam      :: String,
+    anon_idx :: Int,
+    syms     :: SA.SymTab2 (Expr SourcePos),
+    topInst  :: [String]
+} deriving (Show)
+
+type SrdlParser = ReaderT [String] (StateT ParseState Parser)
 
 sc = L.space (void spaceChar) lineCmnt blockCmnt
   where lineCmnt  = L.skipLineComment "//"
@@ -47,77 +64,22 @@ lexeme p = do
 
 identifier = lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
 
-parseIdentifier = do
-    pos <- getPosition
-    id  <- identifier
-    return $ pos :< (Identifier id)
+parseIdentifier = identifier
 
 symbol = L.symbol sc
+
+type ReaderEnv = [String]
+
+rword :: String -> ReaderT ReaderEnv (StateT ParseState Parser) ()
 rword w = string w *> notFollowedBy alphaNumChar *> sc
 
 braces = between lbrace rbrace
 
-data SymTab a = SymTab Int (M.Map String a)
-
-data ParseLoc =
-      TOP
-    | CHILD
-    | ANON_DEF
-
-data ParseState = ParseState {
-    loc :: ParseLoc,
-    nam :: String,
-    anon_idx :: Int
-}
-
-type SrdlParser = ReaderT (SymTab Int) (StateT ParseState Parser)
-
-data ExprF a =
-     CompDef   {
-        ctype :: CompType,
-        dd    :: a,
-        expr  :: [a]
-     }
-   | Identifier {
-        id    :: String
-     }
-   | CompInst {
-        def   :: String,
-        name :: a,
-        arr   :: Maybe Array,
-        align :: [Alignment]
-     }
-   | PropDef {
-        name     :: a,
-        propType :: PropType,
-        ctypes   :: [CompType],
-        value    :: Maybe PropRHS
-     }
-   | PropAssign {
-        path  :: [a],
-        prop  :: a,
-        rhs   :: PropRHS
-     }
-   | PathElem {
-        name  :: a,
-        arr   :: Maybe Array
-     }
-   | TopExpr {
-        exprs :: [a]
-     }
-   deriving (Show, Functor, Traversable, Foldable)
-
-type Expr a = Cofree ExprF a
-
-data Alignment =
-     At Integer
-   | Mod Integer
-   | Stride Integer deriving (Show)
 
 parseTop = do
     pos <- getPosition
-    expr <- many parseExpr
-    return $ pos :< TopExpr expr
+    e <- many parseExpr
+    return $ pos :< TopExpr e
 
 parseExpr :: SrdlParser (Expr SourcePos)
 parseExpr = do
@@ -144,15 +106,18 @@ parseCompName = do
     parseIdentifier <|> do
       idx <- lift get
       lift (modify (\s -> s {anon_idx = anon_idx s + 1}))
-      return $ pos :< Identifier ("__anon_def" ++ (show $ anon_idx idx))
+      return $ "__anon_def" ++ (show $ anon_idx idx)
 
 parseCompDef = do
    pos   <- getPosition
    cType <- parseCompType
    name  <- parseCompName
-   expr  <- braces $ many parseExpr
-   lift (modify $ \s -> s { loc = ANON_DEF, nam = extractID name })
-   return $ pos :< CompDef cType name expr
+   expr  <- withReaderT (++ [name]) $ do braces $ many parseExpr
+   lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
+   scope <- ask
+   let def = pos :< CompDef cType name expr
+   lift (modify $ \s -> s { syms = SA.add (syms s) scope name def})
+   return $ def
 
 parseCompType =
        parseRsvdRet "addrmap" Addrmap
@@ -161,16 +126,17 @@ parseCompType =
    <|> parseRsvdRet "regfile" Regfile
    <|> parseRsvdRet "signal"  Signal
 
+--parseRsvdRet :: String -> PropType -> Parser PropType
+parseRsvdRet :: String -> b -> ReaderT [String] (StateT ParseState Parser) b
 parseRsvdRet a b = do
    try (rword a)
    return b
 
-extractID (_ :< Identifier i) = i
 
 parseExpCompInst = do
    pos  <- getPosition
    inst <- parseIdentifier
-   lift (modify $ \s -> s { loc = ANON_DEF, nam = extractID inst })
+   lift (modify $ \s -> s { loc = ANON_DEF, nam = inst })
    parseExpr
 
 parseCompInst = do
@@ -194,10 +160,9 @@ parseArray2 = do
    return $ ArrLR {left = left, right = right}
 
 pathElem = do
-   pos <- getPosition
    id  <- parseIdentifier
    arr <- optional parseArray1
-   return $ pos :< PathElem id arr
+   return $ PathElem id arr
 
 parsePropAssign = try parseDefPropAssign <|> try parseExpPropAssign <|> try parsePostPropAssign
 
@@ -232,10 +197,10 @@ parsePropDefBody = makePermParser $ (,,) <$$> p1 <||> p2 <|?> (Nothing, p3)
          rhs <- rword "default" *> equal *> parseRHS <* semi
          return $ Just rhs
       parseType =
-             parseRsvdRet "string"  PropLitT
-         <|> parseRsvdRet "number"  PropNumT
-         <|> parseRsvdRet "boolean" PropBoolT
-         <|> parseRsvdRet "ref"     PropRefT
+           parseRsvdRet "string"  PropLitT
+       <|> parseRsvdRet "number"  PropNumT
+       <|> parseRsvdRet "boolean" PropBoolT
+       <|> parseRsvdRet "ref"     PropRefT
 
 parsePropDef = do
    pos <- getPosition
@@ -276,9 +241,16 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-pp = evalStateT (runReaderT parseTop (SymTab 0 M.empty)) (ParseState TOP "" 0)
+pp = runStateT (runReaderT parseTop ([])) (ParseState TOP "" 0 M.empty [])
 
 hsrdlParseFile file = runParser pp file <$> readFile file
+
+a = hsrdlParseFile "test/srdl/user_prop.srdl" 
+b = unsafePerformIO a
+f (Right a) = a
+(t, s) = f b
+
+
 
 --parseString p s = parse p "file" s
 --hsrdlParseString s = parse parseSrdl "file" s

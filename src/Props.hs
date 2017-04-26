@@ -1,56 +1,17 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Props (
-       PropRHS(..)
-     , CompType (..)
-     , Identifier
-     , Array(..)
-     , ElemPath
-     , EnumDef
-     , PropType(..)
-     , Property(..)
-     , defDefs
-     , PropDefs
+       defDefs
      , getTypeString
      , getPropType
      , checktype
+     , addProperty
      ) where
 
 import qualified Data.Map.Strict as M
+import Control.Lens
 
-type Identifier = String
-type ElemPath = [(Identifier, Maybe Array)]
-
-data Array =
-     ArrWidth {
-       width :: Integer
-     }
-   | ArrLR {
-       left :: Integer,
-       right :: Integer
-     } deriving (Show,Eq)
-
-data CompType =
-     Addrmap
-   | Regfile
-   | Reg
-   | Field
-   | Signal
-   | Array deriving (Ord,Eq)
-
-instance Show (CompType) where
-   show Addrmap = "addrmap"
-   show Regfile = "regfile"
-   show Reg     = "reg"
-   show Field   = "field"
-   show Signal  = "signal"
-   show Array   = "array"
-
-data PropType =
-     PropLitT
-   | PropNumT
-   | PropBoolT
-   | PropRefT
-   | PropPathT
-   | PropEnumT EnumDef deriving (Show,Eq)
+import Types
 
 getTypeString (PropLit  _)   = "string"
 getTypeString (PropNum  _)   = "number"
@@ -66,26 +27,6 @@ checktype (Just PropLitT)  (PropLit  _) = True
 checktype (Just PropBoolT) (PropBool _) = True
 checktype (Just PropRefT)  (PropRef  _ _) = True
 checktype _ _ = False
-
-data PropRHS =
-     PropLit  String
-   | PropNum  Integer
-   | PropBool Bool
-   | PropRef  ElemPath Identifier
-   | PropPath ElemPath
-   | PropEnum EnumDef Identifier deriving (Show,Eq)
-
-data Property = Property {
-   ptype    :: PropType,
-   pdefault :: Maybe PropRHS
-} deriving (Show,Eq)
-
-type PropDefs = M.Map CompType (M.Map Identifier Property)
-
-data EnumDef = EnumDef {
-   name   :: String,
-   values :: M.Map Identifier Integer
-} deriving (Show,Eq)
 
 accessType = EnumDef "access_type" (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na", 4)])
 
@@ -123,6 +64,10 @@ getPropType p = do
     compProps <- M.lookup Field defDefs
     prop <- M.lookup p compProps
     return $ ptype prop
+
+addProperty p n = foldl (addCompProperty n) p (ctypes n)
+
+addCompProperty n p c = p & (at c . _Just . at (name n)) ?~ Property (propType n) (value n)
 
 defDefs = M.fromList [
    (Field,   M.fromList [ p_we

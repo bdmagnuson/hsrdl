@@ -19,3 +19,5 @@ push            = (:) M.empty
 add n d (x:xs)  = (M.insert n d x) : xs
 lkup n x        = msum $ map (M.lookup n)  x
 
+
+

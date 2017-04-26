@@ -4,11 +4,11 @@ property userprop {
 };
 
 addrmap test {
-   reg {
+   reg regff {
       userprop = 3;
       //desc = "ff";
 
-      field {} f1;
+      field test {} f1;
    } reg1;
 
    reg {
