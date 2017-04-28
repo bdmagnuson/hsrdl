@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE TemplateHaskell #-}
 module SparseArray (
     lkup,
     deflkup,
@@ -11,13 +12,18 @@ module SparseArray (
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Control.Monad (guard)
+import Text.Show.Deriving
 
 data SparseArray a = SparseArray {
     l :: Int,
     m :: Int,
     d :: a,
     a :: M.Map Int a
-} deriving (Show, Functor)
+} deriving (Functor)
+
+$(deriveShow ''SparseArray)
+$(deriveShow1 ''SparseArray)
+$(deriveShow1 ''M.Map)
 
 lkup :: Int -> SparseArray a -> Maybe a
 lkup i sa = do

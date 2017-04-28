@@ -9,6 +9,7 @@ module Parser (
        rws
      , SourcePos
      , hsrdlParseFile
+     , t, s, ret
      ) where
 
 import GHC.IO
@@ -30,8 +31,7 @@ import Types
 import qualified SymbolTable2 as SA
 
 data ParseLoc =
-      TOP
-    | CHILD
+      CHILD
     | ANON_DEF deriving (Show)
 
 data ParseState = ParseState {
@@ -42,7 +42,7 @@ data ParseState = ParseState {
     topInst  :: [String]
 } deriving (Show)
 
-type SrdlParser = ReaderT [String] (StateT ParseState Parser)
+type SrdlParser = ReaderT ReaderEnv (StateT ParseState Parser)
 
 sc = L.space (void spaceChar) lineCmnt blockCmnt
   where lineCmnt  = L.skipLineComment "//"
@@ -68,7 +68,10 @@ parseIdentifier = identifier
 
 symbol = L.symbol sc
 
-type ReaderEnv = [String]
+data ReaderEnv = ReaderEnv {
+    scope :: [String],
+    level :: Int
+}
 
 rword :: String -> ReaderT ReaderEnv (StateT ParseState Parser) ()
 rword w = string w *> notFollowedBy alphaNumChar *> sc
@@ -85,10 +88,6 @@ parseExpr :: SrdlParser (Expr SourcePos)
 parseExpr = do
    st <- lift get
    case (loc st) of
-      TOP ->    parseCompDef
-            <|> parsePropAssign
-            <|> parsePropDef
-            <|> parseExpCompInst
       ANON_DEF -> parseCompInst <* (choice [c, s])
         where
             s = do
@@ -99,6 +98,7 @@ parseExpr = do
       CHILD ->
             parseCompDef
         <|> parsePropAssign
+        <|> parsePropDef
         <|> parseExpCompInst
 
 parseCompName = do
@@ -108,15 +108,22 @@ parseCompName = do
       lift (modify (\s -> s {anon_idx = anon_idx s + 1}))
       return $ "__anon_def" ++ (show $ anon_idx idx)
 
+addTopDef c name = do
+    env <- ask
+    return ()
+
 parseCompDef = do
    pos   <- getPosition
    cType <- parseCompType
    name  <- parseCompName
-   expr  <- withReaderT (++ [name]) $ do braces $ many parseExpr
-   lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
-   scope <- ask
+   expr  <- withReaderT (\s -> s {level = (level s) + 1, scope = (scope s) ++ [name]}) $ do braces $ many parseExpr
+   env   <- ask
+   when ((cType == Addrmap) && ((level env) == 0)) (lift (modify (\s -> s {topInst = (topInst s) ++ [name]})))
    let def = pos :< CompDef cType name expr
-   lift (modify $ \s -> s { syms = SA.add (syms s) scope name def})
+   lift (modify $ \s -> s { syms = SA.add (syms s) (scope env) name def})
+   _ <- (try semi) <|> do
+                        lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
+                        return ""
    return $ def
 
 parseCompType =
@@ -126,8 +133,7 @@ parseCompType =
    <|> parseRsvdRet "regfile" Regfile
    <|> parseRsvdRet "signal"  Signal
 
---parseRsvdRet :: String -> PropType -> Parser PropType
-parseRsvdRet :: String -> b -> ReaderT [String] (StateT ParseState Parser) b
+parseRsvdRet :: String -> b -> ReaderT ReaderEnv (StateT ParseState Parser) b
 parseRsvdRet a b = do
    try (rword a)
    return b
@@ -140,11 +146,16 @@ parseExpCompInst = do
    parseExpr
 
 parseCompInst = do
-   s <- lift get
+   s    <- lift get
+   env  <- ask
    pos  <- getPosition
    name <- parseIdentifier
    arr  <- optional parseArray1
+   _    <- f $ SA.lkup (syms s) (scope env) (nam s)
    return $ pos :< (CompInst (nam s) name arr [])
+        where f (Just ([""], _ :< CompDef t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
+                                                       return ()
+              f _ = return ()
 
 parseArray = try parseArray1 <|> parseArray2
 parseArray1 = do
@@ -241,7 +252,7 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-pp = runStateT (runReaderT parseTop ([])) (ParseState TOP "" 0 M.empty [])
+pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" 0 M.empty [])
 
 hsrdlParseFile file = runParser pp file <$> readFile file
 
@@ -249,6 +260,8 @@ a = hsrdlParseFile "test/srdl/user_prop.srdl"
 b = unsafePerformIO a
 f (Right a) = a
 (t, s) = f b
+
+ret = (topInst s, syms s)
 
 
 

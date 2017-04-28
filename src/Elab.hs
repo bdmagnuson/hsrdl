@@ -8,14 +8,19 @@ module Elab (
 
 import GHC.IO
 
-import Control.Monad.State
+--import Control.Monad.State
 import Control.Monad.Identity
 import Control.Comonad.Cofree
 import qualified Data.Map.Strict as M
 import SparseArray as SA
-import SymbolTable as S
+import SymbolTable2 as S
 import Data.Maybe (fromJust)
 import Data.Functor.Foldable
+
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Class
+import Text.Show.Deriving
 
 import Props
 import Parser
@@ -28,9 +33,10 @@ data Msgs = Msgs {
     err   :: [String]
 } deriving (Show)
 
+emptyMsgs = Msgs [] [] []
+
 data ElabState = ElabState {
     msgs :: Msgs,
-    syms :: S.SymTab String (Expr SourcePos),
     sprops :: M.Map CompType (M.Map String Property)
 } deriving (Show)
 
@@ -43,37 +49,48 @@ data Elab a
         eprops :: Props,
         einst :: [a]
     }
- |  EField   String Props deriving (Functor)
+ |  EField   String Props deriving (Show, Functor)
 
-type ElabS a = State ElabState a
+$(deriveShow1 ''Elab)
+
+type ElabS = State ElabState
+
+data ReaderEnv = ReaderEnv {
+    scope :: [String],
+    syms  :: S.SymTab2 (Expr SourcePos)
+}
 
 --use lenses for this - yuck!
 logMsg t m = do
     case t of
-        "info"  -> modify (\s -> s {msgs = (msgs s) {info = m : (info (msgs s))}})
-        "warn"  -> modify (\s -> s {msgs = (msgs s) {warn = m : (warn (msgs s))}})
-        "err"   -> modify (\s -> s {msgs = (msgs s) {err  = m : (err  (msgs s))}})
+        "info"  -> lift $ modify (\s -> s {msgs = (msgs s) {info = m : (info (msgs s))}})
+        "warn"  -> lift $ modify (\s -> s {msgs = (msgs s) {warn = m : (warn (msgs s))}})
+        "err"   -> lift $ modify (\s -> s {msgs = (msgs s) {err  = m : (err  (msgs s))}})
+        _       -> return ()
     return ()
 
-instantiate :: String -> String -> ElabS (Maybe (Fix Elab))
+
+instantiate :: String -> String -> ReaderT ReaderEnv ElabS (Maybe (Fix Elab))
 instantiate d n = do
-    modify (\s -> s { syms = push (syms s) })
-    s <- get
-    d <- case S.lkup d (syms s) of
+    s   <- lift get
+    env <- ask
+    case S.lkup (syms env) (scope env) d of
         Nothing -> do
-            logMsg "err" ("Lookup failure: " ++ (show n))
+            logMsg "err" ("Lookup failure: " ++ (show d) ++ " in " ++ (show . scope) env)
             return Nothing
-        Just d -> foldl (>>=) (return newinst) (map elaborate (expr (unwrap d)))
+        Just (sc, def) -> withReaderT f $ foldl (>>=) (return newinst) (map elaborate (expr (unwrap def)))
             where
-                newinst = case ctype (unwrap d) of
+                f = \s -> s {scope = sc ++ [d]}
+                newinst = case ctype (unwrap def) of
                    Addrmap -> (Just . Fix) $ EContain n M.empty []
                    Regfile -> (Just . Fix) $ EContain n M.empty []
                    Reg     -> (Just . Fix) $ EContain n M.empty []
-    modify (\s -> s { syms = pop (syms s) })
-    return d
+                   Field   -> (Just . Fix) $ EField n M.empty
 
 ereturn = return . Just . Fix
 assignProp = M.insert
+
+elaborate _ Nothing = return Nothing
 
 elaborate (_ :< CompInst cd cn _ _) (Just (Fix (EContain n p i))) = do
     new <- instantiate cd cn
@@ -96,12 +113,10 @@ elaborate (_ :< PropAssign path prop rhs) (Just e) = return $ propAssign path pr
                 getName ((Fix (EContain n _ _))) = n
                 getName ((Fix (EField n _))) = n
 
-elaborate d@(_ :< CompDef _ n _) e = do
-    modify (\s -> s { syms = S.add n d (syms s) })
-    return e
+elaborate d@(_ :< CompDef _ n _) e = return e
 
 elaborate (_ :< d@(PropDef _ _ _ _)) e = do
-    modify (\s -> s { sprops = addProperty (sprops s) d })
+    lift $ modify (\s -> s { sprops = addProperty (sprops s) d })
     return e
 
 
@@ -114,10 +129,10 @@ mod1 p f l = doit [] l p f
                      Just a -> Just ((reverse ys) ++ [a] ++ xs)
            | otherwise = doit (x:ys) xs p f
 
-foo file = do
-   let r = unsafePerformIO (hsrdlParseFile file)
-   case r of (Left e) -> error "error"
-             (Right p) -> p
 
-getTop :: Expr SourcePos -> State (S.SymTab String (Expr SourcePos))
+
+elab (ti, syms) = map f ti
+    where
+        env = ReaderEnv [""] syms
+        f x = runState (runReaderT (instantiate x x) env) (ElabState emptyMsgs M.empty)
 
