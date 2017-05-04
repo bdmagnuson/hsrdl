@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Types (
    ExprF(..)
  , Expr
@@ -12,10 +13,17 @@ module Types (
  , EnumDef(..)
  , PropType(..)
  , Property(..)
+ , ptype
+ , pdefault
+ , assignBits
  ) where
 
 import Control.Comonad.Cofree
 import qualified Data.Map.Strict as M
+import Control.Lens
+import Control.Monad.State
+import Control.Applicative
+import qualified Data.Set as Set
 
 type Identifier = String
 type ElemPath = [(Identifier, Maybe Array)]
@@ -30,7 +38,7 @@ data PathElem = PathElem {
 data ExprF a =
      CompDef   {
         ctype  :: CompType,
-        dname  :: String,
+        name   :: String,
         expr   :: [a]
      }
    | CompInst {
@@ -71,6 +79,29 @@ data Array =
        right :: Integer
      } deriving (Show,Eq)
 
+
+collapseMaybe :: [Maybe a] -> Maybe [a]
+collapseMaybe [] = Just []
+collapseMaybe (x:xs) = (:) <$> x <*> (collapseMaybe xs)
+
+assignBits x = (msb - 1, traverse id g)
+    where (g, (msb, _)) = runState (sequence (map f x)) (0, Set.empty)
+          f :: Array -> State (Integer, Set.Set Integer) (Either String Array)
+          f a@(ArrLR l r) = do
+            (_, used) <- get
+            let set          = Set.fromList [r..l]
+            let intersection = Set.intersection used set
+            let union        = Set.union used set
+            if null intersection
+                then do
+                    put (l + 1, union)
+                    return $ Right a
+                else return (Left ("Field overlap on bits " ++ (show . Set.toList) intersection))
+          f (ArrWidth w) = do
+            (lsb, used) <- get
+            put (lsb + w, Set.union used (Set.fromList [lsb..(lsb + w - 1)]))
+            return $ Right $ ArrLR {left = lsb + w - 1, right = lsb}
+
 data CompType =
      Addrmap
    | Regfile
@@ -86,6 +117,11 @@ instance Show (CompType) where
    show Field   = "field"
    show Signal  = "signal"
    show Array   = "array"
+
+data EnumDef = EnumDef {
+   ename   :: String,
+   values :: M.Map Identifier Integer
+} deriving (Show,Eq)
 
 data PropType =
      PropLitT
@@ -104,13 +140,11 @@ data PropRHS =
    | PropEnum EnumDef Identifier deriving (Show,Eq)
 
 data Property = Property {
-   ptype    :: PropType,
-   pdefault :: Maybe PropRHS
+   _ptype    :: PropType,
+   _pdefault :: Maybe PropRHS
 } deriving (Show,Eq)
+
+makeLenses ''Property
 
 type PropDefs = M.Map CompType (M.Map Identifier Property)
 
-data EnumDef = EnumDef {
-   ename   :: String,
-   values :: M.Map Identifier Integer
-} deriving (Show,Eq)

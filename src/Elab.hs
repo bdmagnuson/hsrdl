@@ -2,19 +2,20 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE GADTs #-}
 module Elab (
    ) where
 
 
-import GHC.IO
+--import GHC.IO
 
---import Control.Monad.State
 import Control.Monad.Identity
 import Control.Comonad.Cofree
+import Control.Comonad
+import Control.Lens hiding ((:<))
 import qualified Data.Map.Strict as M
 import SparseArray as SA
 import SymbolTable2 as S
-import Data.Maybe (fromJust)
 import Data.Functor.Foldable
 
 import Control.Monad.Trans.Reader
@@ -26,98 +27,127 @@ import Props
 import Parser
 import Types
 
+type Props = M.Map String (Maybe PropRHS)
+
+data ElabF a = ElabF {
+    _etype :: CompType,
+    _name  :: String,
+    _props :: Props,
+    _inst  :: [a]
+} deriving (Show, Functor)
+
+
+$(deriveShow1 ''ElabF)
 
 data Msgs = Msgs {
-    info  :: [String],
-    warn  :: [String],
-    err   :: [String]
+    _info  :: [String],
+    _warn  :: [String],
+    _err   :: [String]
 } deriving (Show)
+
+$(makeLenses ''Msgs)
+
+data ElabState = ElabState {
+    _msgs     :: Msgs,
+    _addr     :: Integer,
+    _regwidth :: Integer
+} deriving (Show)
+
+$(makeLenses ''ElabState)
+
+type ElabS = State ElabState
+type Elab = Fix ElabF
 
 emptyMsgs = Msgs [] [] []
 
-data ElabState = ElabState {
-    msgs :: Msgs,
-    sprops :: M.Map CompType (M.Map String Property)
-} deriving (Show)
-
-type Props = M.Map String PropRHS
-
-data Elab a
- =  EArray   String Props (SA.SparseArray a)
- |  EContain {
-        ename :: String,
-        eprops :: Props,
-        einst :: [a]
-    }
- |  EField   String Props deriving (Show, Functor)
-
-$(deriveShow1 ''Elab)
-
-type ElabS = State ElabState
-
 data ReaderEnv = ReaderEnv {
-    scope :: [String],
-    syms  :: S.SymTab2 (Expr SourcePos)
+    _scope  :: [String],
+    _syms   :: S.SymTab2 (Expr SourcePos),
+    _sprops :: M.Map CompType (M.Map String Property)
 }
 
---use lenses for this - yuck!
-logMsg t m = do
-    case t of
-        "info"  -> lift $ modify (\s -> s {msgs = (msgs s) {info = m : (info (msgs s))}})
-        "warn"  -> lift $ modify (\s -> s {msgs = (msgs s) {warn = m : (warn (msgs s))}})
-        "err"   -> lift $ modify (\s -> s {msgs = (msgs s) {err  = m : (err  (msgs s))}})
-        _       -> return ()
-    return ()
+makeLenses ''ReaderEnv
+
+rename x = cata f x where
+    f (ElabF Field a b c ) = Fix $ ElabF Field "woo" b c
+    f x = Fix x
 
 
-instantiate :: String -> String -> ReaderT ReaderEnv ElabS (Maybe (Fix Elab))
-instantiate d n = do
+getFields x = cata f x where
+    f (ElabF Field n _ _) = [n]
+    f (ElabF _ n _ i) = map (\x -> n ++ "." ++ x) (concat i)
+
+getRegs x = cata f x where
+    f (ElabF Reg n p _) = [(n, M.lookup "address" p)]
+    f (ElabF _ n _ i) = map (\(x, y) -> (n ++ "." ++ x, y)) (concat i)
+
+
+logMsg t m = lift $ (msgs . t) %= (m:)
+
+--assignFields a@(pos :< CompDef Reg n fs) =
+--    case assignBits bits of
+--        (_, Left msg) -> do logMsg err msg
+--                            return a
+--        (_, Right newbits) -> return $ a & _unwrap . inst .~ (zipWith f newbits fs)
+--    where bits = map (\x -> (((arr . unwrap) x) ^. _Just) fs
+--          f arr field = field & _unwrap . arr .~ (Just arr)
+
+
+instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
+instantiate (_ :< CompInst d n Nothing _) = do
     s   <- lift get
     env <- ask
-    case S.lkup (syms env) (scope env) d of
+    case S.lkup (env ^. syms) (env ^. scope) d of
         Nothing -> do
-            logMsg "err" ("Lookup failure: " ++ (show d) ++ " in " ++ (show . scope) env)
+            logMsg err ("Lookup failure: " ++ (show d) ++ " in " ++ (show (env ^. scope)))
             return Nothing
-        Just (sc, def) -> withReaderT f $ foldl (>>=) (return newinst) (map elaborate (expr (unwrap def)))
+        Just (sc, _ :< def) -> withReaderT (scope .~ (sc ++ [d])) $ foldl (>>=) newinst (map elaborate (expr def))
             where
-                f = \s -> s {scope = sc ++ [d]}
-                newinst = case ctype (unwrap def) of
-                   Addrmap -> (Just . Fix) $ EContain n M.empty []
-                   Regfile -> (Just . Fix) $ EContain n M.empty []
-                   Reg     -> (Just . Fix) $ EContain n M.empty []
-                   Field   -> (Just . Fix) $ EField n M.empty
+                newdef = ctype def
+                newinst = do
+                  addr <- lift (use addr)
+                  let defprop = M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList (env ^. sprops . at newdef . _Just)) --LOL
+                  let newprop = assignProp "address" (PropNum addr) defprop
+                  ereturn $ ElabF newdef n (if (newdef /= Field) then newprop else defprop) []
+
+instantiate (pos :< CompInst d name (Just (ArrWidth n)) a) = do
+    x <- mapM (\x -> instantiate (pos :< CompInst d (show x) Nothing a)) [0..(n-1)]
+    case (traverse id x) of
+        Nothing -> return Nothing
+        Just ff -> ereturn $ ElabF Array name M.empty ff
 
 ereturn = return . Just . Fix
-assignProp = M.insert
+assignProp k v m = M.insert k (Just v) m
 
 elaborate _ Nothing = return Nothing
 
-elaborate (_ :< CompInst cd cn _ _) (Just (Fix (EContain n p i))) = do
-    new <- instantiate cd cn
+
+elaborate inst@(pos :< (CompInst cd cn _ _)) (Just (Fix (ElabF t n p i))) = do
+    s <- lift get
+    new <- instantiate inst
     case new of
-        Nothing -> return Nothing
-        Just a -> ereturn $ EContain n p (i ++ [a])
+        Nothing -> do
+            logMsg err ((show pos) ++ ": Failed to instantiate " ++ (show cd))
+            return Nothing
+        Just a -> do
+--                aa <- calcRegLayout a
+                gg <- lift (use regwidth)
+                when (t == Reg) $ lift (addr += gg)
+                ereturn $ ElabF t n p (i ++ [a])
 
 elaborate (_ :< PropAssign path prop rhs) (Just e) = return $ propAssign path prop rhs e
     where
-        propAssign'  prop rhs (Fix (EField   n p))    = Fix $ EField n (assignProp prop rhs p)
-        propAssign'  prop rhs (Fix (EContain n p i))  = Fix $ EContain n (assignProp prop rhs p) i
+        propAssign'  prop rhs (Fix (ElabF t n p i))  = Fix $ ElabF t n (assignProp prop rhs p) i
         propAssign [] prop rhs e = Just $ propAssign' prop rhs e
-        propAssign (t:ts) prop rhs (Fix (EContain n p i))  =
+        propAssign (t:ts) prop rhs (Fix (ElabF t' n p i))  =
             let update = (mod1 ((== (peName t)) . getName) (propAssign ts prop rhs) i) in
                 case update of
                     Nothing -> Nothing
-                    Just u -> (Just . Fix) $ EContain n p u
+                    Just u -> (Just . Fix) $ ElabF t' n p u
             where
-                getName ((Fix (EArray n _ _))) = n
-                getName ((Fix (EContain n _ _))) = n
-                getName ((Fix (EField n _))) = n
+                getName ((Fix (ElabF _ n _ _))) = n
 
 elaborate d@(_ :< CompDef _ n _) e = return e
-
-elaborate (_ :< d@(PropDef _ _ _ _)) e = do
-    lift $ modify (\s -> s { sprops = addProperty (sprops s) d })
-    return e
 
 
 mod1 p f l = doit [] l p f
@@ -129,10 +159,15 @@ mod1 p f l = doit [] l p f
                      Just a -> Just ((reverse ys) ++ [a] ++ xs)
            | otherwise = doit (x:ys) xs p f
 
-
+-- No monoid instance for AST so forced to use ^.. which returns a list
+getDef syms scope def = head $ (S.lkup syms scope def) ^.. _Just
 
 elab (ti, syms) = map f ti
     where
-        env = ReaderEnv [""] syms
-        f x = runState (runReaderT (instantiate x x) env) (ElabState emptyMsgs M.empty)
+        env = ReaderEnv [""] syms M.empty
+        st  = ElabState {_msgs = emptyMsgs, _addr = 0, _regwidth = 4}
+        f x = runState (runReaderT (instantiate (pos :< CompInst x x Nothing [])) env) st
+            where pos = extract $ getDef syms [""] x ^. _2
 
+a =  (elab ret)
+f ((Just s,_):_) = s

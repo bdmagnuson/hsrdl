@@ -3,7 +3,8 @@
 module SymbolTable2 (
       lkup,
       add,
-      SymTab2
+      SymTab2,
+      empty
    ) where
 
 import qualified Data.Map.Strict as M

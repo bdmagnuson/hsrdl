@@ -63,7 +63,7 @@ getPropType :: String -> Maybe PropType
 getPropType p = do
     compProps <- M.lookup Field defDefs
     prop <- M.lookup p compProps
-    return $ ptype prop
+    return $ prop ^. ptype
 
 addProperty p n = foldl (addCompProperty n) p (ctypes n)
 
