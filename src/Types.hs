@@ -15,7 +15,6 @@ module Types (
  , Property(..)
  , ptype
  , pdefault
- , assignBits
  ) where
 
 import Control.Comonad.Cofree
@@ -80,27 +79,27 @@ data Array =
      } deriving (Show,Eq)
 
 
-collapseMaybe :: [Maybe a] -> Maybe [a]
-collapseMaybe [] = Just []
-collapseMaybe (x:xs) = (:) <$> x <*> (collapseMaybe xs)
-
-assignBits x = (msb - 1, traverse id g)
-    where (g, (msb, _)) = runState (sequence (map f x)) (0, Set.empty)
-          f :: Array -> State (Integer, Set.Set Integer) (Either String Array)
-          f a@(ArrLR l r) = do
-            (_, used) <- get
-            let set          = Set.fromList [r..l]
-            let intersection = Set.intersection used set
-            let union        = Set.union used set
-            if null intersection
-                then do
-                    put (l + 1, union)
-                    return $ Right a
-                else return (Left ("Field overlap on bits " ++ (show . Set.toList) intersection))
-          f (ArrWidth w) = do
-            (lsb, used) <- get
-            put (lsb + w, Set.union used (Set.fromList [lsb..(lsb + w - 1)]))
-            return $ Right $ ArrLR {left = lsb + w - 1, right = lsb}
+--collapseMaybe :: [Maybe a] -> Maybe [a]
+--collapseMaybe [] = Just []
+--collapseMaybe (x:xs) = (:) <$> x <*> (collapseMaybe xs)
+--
+--assignBits x = (msb - 1, traverse id g)
+--    where (g, (msb, _)) = runState (sequence (map f x)) (0, Set.empty)
+--          f :: Array -> State (Integer, Set.Set Integer) (Either String Array)
+--          f a@(ArrLR l r) = do
+--            (_, used) <- get
+--            let set          = Set.fromList [r..l]
+--            let intersection = Set.intersection used set
+--            let union        = Set.union used set
+--            if null intersection
+--                then do
+--                    put (l + 1, union)
+--                    return $ Right a
+--                else return (Left ("Field overlap on bits " ++ (show . Set.toList) intersection))
+--          f (ArrWidth w) = do
+--            (lsb, used) <- get
+--            put (lsb + w, Set.union used (Set.fromList [lsb..(lsb + w - 1)]))
+--            return $ Right $ ArrLR {left = lsb + w - 1, right = lsb}
 
 data CompType =
      Addrmap

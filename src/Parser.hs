@@ -150,7 +150,7 @@ parseCompInst = do
    env  <- ask
    pos  <- getPosition
    name <- parseIdentifier
-   arr  <- optional parseArray1
+   arr  <- optional parseArray
    _    <- f $ SA.lkup (syms s) (scope env) (nam s)
    return $ pos :< (CompInst (nam s) name arr [])
         where f (Just ([""], _ :< CompDef t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
