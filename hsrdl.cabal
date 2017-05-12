@@ -26,6 +26,8 @@ library
                      , recursion-schemes
                      , lens
                      , deriving-compat
+                     , HStringTemplate
+                     , wl-pprint
   default-language:    Haskell2010
 
 executable hsrdl-exe

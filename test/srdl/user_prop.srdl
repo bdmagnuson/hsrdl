@@ -3,16 +3,6 @@ property userprop {
    type = boolean;
 };
 
-addrmap sub {
-   reg {
-      field {} a[2];
-      field {} b[2];
-      field {} c[7:6];
-   } b[2];
-   reg { field {} a[3];} c[3];
-   reg { field {} a[4];} d[4];
-};
-
 
 addrmap test {
    reg regff {
@@ -22,7 +12,14 @@ addrmap test {
       field test {} f1;
    };
 
-   sub b;
+   reg {
+      field {} a[2];
+      field {reset = 4;} b[2];
+      field {} c[7:6];
+   } b[2];
+
+   reg { field {} a[3];} c[3];
+   reg { field {} a[4];} d[4];
 
    reg {
       userprop = 3;
@@ -30,10 +27,5 @@ addrmap test {
       field {} f1;
    } reg2[4];
 
-   sub b1;
-};
-
-addrmap baz {
-   reg { field {} a;} b;
 };
 

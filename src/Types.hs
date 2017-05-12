@@ -13,6 +13,7 @@ module Types (
  , EnumDef(..)
  , PropType(..)
  , Property(..)
+ , ElabF (..)
  , ptype
  , pdefault
  ) where
@@ -146,4 +147,13 @@ data Property = Property {
 makeLenses ''Property
 
 type PropDefs = M.Map CompType (M.Map Identifier Property)
+
+data ElabF a = ElabF {
+    _etype :: CompType,
+    _name  :: String,
+    _props :: M.Map String (Maybe PropRHS),
+    _inst  :: [a],
+    _lsb   :: Integer,
+    _msb   :: Integer
+} deriving (Show, Functor, Traversable, Foldable)
 

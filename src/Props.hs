@@ -70,7 +70,7 @@ addProperty p n = foldl (addCompProperty n) p (ctypes n)
 addCompProperty n p c = p & (at c . _Just . at (name n)) ?~ Property (propType n) (value n)
 
 defDefs = M.fromList [
-   (Field,   M.fromList [ p_we
+   (Field,   M.fromList [   p_we
                           , p_hw
                           , p_sw
                           , p_name
