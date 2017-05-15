@@ -1,7 +1,3 @@
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 
@@ -37,7 +33,7 @@ data ParseLoc =
 data ParseState = ParseState {
     loc      :: ParseLoc,
     nam      :: String,
-    anon_idx :: Int,
+    anonIdx :: Int,
     syms     :: SA.SymTab2 (Expr SourcePos),
     topInst  :: [String]
 } deriving (Show)
@@ -58,9 +54,7 @@ equal  = symbol "="
 pipe   = symbol "|"
 dquote = symbol "\""
 
-lexeme p = do
-   l   <- L.lexeme sc p
-   return $ l
+lexeme = L.lexeme sc
 
 identifier = lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
 
@@ -87,8 +81,8 @@ parseTop = do
 parseExpr :: SrdlParser (Expr SourcePos)
 parseExpr = do
    st <- lift get
-   case (loc st) of
-      ANON_DEF -> parseCompInst <* (choice [c, s])
+   case loc st of
+      ANON_DEF -> parseCompInst <* choice [c, s]
         where
             s = do
                 a <- semi
@@ -105,8 +99,8 @@ parseCompName = do
     pos <- getPosition
     parseIdentifier <|> do
       idx <- lift get
-      lift (modify (\s -> s {anon_idx = anon_idx s + 1}))
-      return $ "__anon_def" ++ (show $ anon_idx idx)
+      lift (modify (\s -> s {anonIdx = anonIdx s + 1}))
+      return $ "__anon_def" ++ show (anonIdx idx)
 
 addTopDef c name = do
     env <- ask
@@ -116,15 +110,15 @@ parseCompDef = do
    pos   <- getPosition
    cType <- parseCompType
    name  <- parseCompName
-   expr  <- withReaderT (\s -> s {level = (level s) + 1, scope = (scope s) ++ [name]}) $ do braces $ many parseExpr
+   expr  <- withReaderT (\s -> s {level = level s + 1, scope = scope s ++ [name]}) $ braces $ many parseExpr
    env   <- ask
-   when ((cType == Addrmap) && ((level env) == 0)) (lift (modify (\s -> s {topInst = (topInst s) ++ [name]})))
+   when ((cType == Addrmap) && (level env == 0)) (lift (modify (\s -> s {topInst = topInst s ++ [name]})))
    let def = pos :< CompDef cType name expr
    lift (modify $ \s -> s { syms = SA.add (syms s) (scope env) name def})
-   _ <- (try semi) <|> do
+   _ <- try semi <|> do
                         lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
                         return ""
-   return $ def
+   return def
 
 parseCompType =
        parseRsvdRet "addrmap" Addrmap
@@ -152,15 +146,15 @@ parseCompInst = do
    name <- parseIdentifier
    arr  <- optional parseArray
    _    <- f $ SA.lkup (syms s) (scope env) (nam s)
-   return $ pos :< (CompInst (nam s) name arr [])
+   return $ pos :< CompInst (nam s) name arr []
         where f (Just ([""], _ :< CompDef t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
                                                        return ()
               f _ = return ()
 
 parseArray = try parseArray1 <|> parseArray2
 parseArray1 = do
-   size <- (symbol "[") *> L.decimal <* (symbol "]")
-   return $ ArrWidth {width = size}
+   size <- symbol "[" *> L.decimal <* symbol "]"
+   return ArrWidth {width = size}
 
 parseArray2 = do
    symbol "["
@@ -168,7 +162,7 @@ parseArray2 = do
    symbol ":"
    right <- L.decimal
    symbol "]"
-   return $ ArrLR {left = left, right = right}
+   return ArrLR {left = left, right = right}
 
 pathElem = do
    id  <- parseIdentifier
@@ -231,7 +225,7 @@ parseRHS =
             a <- L.decimal
             return $ PropNum a
          parseBool = do
-            a <- (rword "true") *> return True <|> (rword "false") *> return False
+            a <- rword "true" *> return True <|> rword "false" *> return False
             return $ PropBool a
 
 rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",

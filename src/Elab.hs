@@ -40,9 +40,9 @@ type instance IxValue (Fix ElabF) = Fix ElabF
 type instance Index (Fix ElabF) = String
 
 instance Ixed (Fix ElabF) where
-    ix k f m = case break (\x -> (unfix x) ^. Elab.name == k) ((unfix m) ^. inst) of
+    ix k f m = case break (\x -> unfix x ^. Elab.name == k) (unfix m ^. inst) of
                 (_, []) -> pure m
-                (i, l:ls) -> f l <&> \x -> Fix $ (unfix m) & inst .~ (i ++ (x:ls))
+                (i, l:ls) -> f l <&> \x -> Fix $ unfix m & inst .~ (i ++ (x:ls))
 
 data Msgs = Msgs {
     _info  :: [String],
@@ -75,24 +75,12 @@ data ReaderEnv = ReaderEnv {
 
 makeLenses ''ReaderEnv
 
-rename x = cata f x where
-    f (ElabF Field a b c _ _) = Fix $ ElabF Field "woo" b c 0 0
-    f x = Fix x
-
-
-getFields x = cata f x where
-    f (ElabF Field n _ _ _ _) = [n]
-    f (ElabF _ n _ i _ _) = map (\x -> n ++ "." ++ x) (concat i)
-
-getRegs x = cata f x where
-    f (ElabF Reg n p _ _ _) = [(n, M.lookup "address" p)]
-    f (ElabF _ n _ i _ _) = map (\(x, y) -> (n ++ "." ++ x, y)) (concat i)
 
 
 logMsg t m = lift $ (msgs . t) %= (m:)
 
 
-assignBits :: (Maybe Array) -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
+assignBits :: Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 assignBits _ Nothing = return Nothing
 assignBits Nothing r = assignBits (Just (ArrWidth 1)) r
 assignBits (Just arr) (Just (Fix reg)) = do
@@ -112,7 +100,7 @@ assignBits (Just arr) (Just (Fix reg)) = do
             logMsg err ("Field overlap on bits " ++ (show . Set.toList) intersection)
             return Nothing
     where
-        range x y = if (x < y) then [x..y] else [y..x]
+        range x y = if x < y then [x..y] else [y..x]
 
 resetBits = do
     lift (nextbit .= 0)
@@ -125,21 +113,21 @@ instantiate (pos :< CompInst d n arr a) = do
     env <- ask
     case S.lkup (env ^. syms) (env ^. scope) d of
         Nothing -> do
-            logMsg err ("Lookup failure: " ++ (show d) ++ " in " ++ (show (env ^. scope)))
+            logMsg err ("Lookup failure: " ++ show d ++ " in " ++ show (env ^. scope))
             return Nothing
         Just (sc, _ :< def) ->
           case (ctype def, arr) of
-            (Field, _)      -> (foo newinst >>= assignBits arr)
+            (Field, _)      -> foo newinst >>= assignBits arr
             (_, Just (ArrWidth w)) -> do x <- mapM (\x -> instantiate (pos :< CompInst d (show x) Nothing a)) [0..(w-1)]
-                                         case (traverse id x) of
+                                         case traverse id x of
                                            Nothing -> return Nothing
                                            Just ff -> ereturn $ ElabF Array n M.empty ff 0 0
-            (Reg, Nothing) -> (foo (newinst >>= assignAddress)) <* incrAddress <* resetBits
-            otherwise -> (foo newinst) <* incrAddress
+            (Reg, Nothing) -> foo (newinst >>= assignAddress) <* incrAddress <* resetBits
+            otherwise -> foo newinst <* incrAddress
          where
            foo x   = withReaderT (scope .~ (sc ++ [d])) $ foldl (>>=) x (map elaborate (expr def))
-           newinst = ereturn $ ElabF {
-             _etype = (ctype def),
+           newinst = ereturn ElabF {
+             _etype = ctype def,
              _name  = n,
              _props =  M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList (env ^. sprops . at (ctype def) . _Just)),
              _inst  = [],
@@ -147,34 +135,33 @@ instantiate (pos :< CompInst d n arr a) = do
              _msb   = 0}
            assignAddress (Just (Fix a)) = do
              b <- lift (use addr)
-             ereturn $ a & props %~ (assignProp "address" (PropNum b))
+             ereturn $ a & props %~ assignProp "address" (PropNum b)
            incrAddress = do
               gg <- lift (use regwidth)
               lift (addr += gg)
               return ()
 
 elaborate _ Nothing = return Nothing
-elaborate ins@(pos :< (CompInst cd cn _ _)) (Just i) = do
+elaborate ins@(pos :< CompInst cd cn _ _) (Just i) = do
     s <- lift get
-    if (isJust $ i ^? ix cn)
+    if isJust $ i ^? ix cn
         then do
-          logMsg err ((show pos) ++ cn ++  " already defined")
+          logMsg err (show pos ++ cn ++  " already defined")
           return Nothing
         else do
           new <- instantiate ins
           case new of
             Nothing -> do
-              logMsg err ((show pos) ++ ": Failed to instantiate " ++ (show cd))
+              logMsg err (show pos ++ ": Failed to instantiate " ++ show cd)
               return Nothing
-            Just a -> (return . Just) $ (i & _Fix . inst %~ (++ [a]))
+            Just a -> (return . Just) (i & _Fix . inst %~ (++ [a]))
 
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
     case buildPropLens e (map peName path) of
         Left elm -> do
-            logMsg err ((show pos) ++ ": invalid path, failed at \"" ++ (show elm) ++ "\"")
+            logMsg err (show pos ++ ": invalid path, failed at \"" ++ show elm ++ "\"")
             return Nothing
-        Right l -> do
-            (return . Just)  $ e & l . _Fix . props %~ assignProp prop rhs
+        Right l -> (return . Just)  $ e & l . _Fix . props %~ assignProp prop rhs
 
 elaborate d@(_ :< CompDef _ n _) e = return e
 
@@ -187,7 +174,7 @@ buildPropLens e xs =
            Just a  -> Right (x . ix y)
 
 -- No monoid instance for AST so forced to use ^.. which returns a list
-getDef syms scope def = head $ (S.lkup syms scope def) ^.. _Just
+getDef syms scope def = head $ S.lkup syms scope def ^.. _Just
 
 elab (ti, syms) = map f ti
     where
@@ -197,9 +184,9 @@ elab (ti, syms) = map f ti
             where pos = extract $ getDef syms [""] x ^. _2
 
 ereturn = return . Just . Fix
-assignProp k v m = M.insert k (Just v) m
+assignProp k v = M.insert k (Just v)
 
-a =  (elab ret)
+a =  elab ret
 f ((Just s,_):_) = s
 out = f a
 

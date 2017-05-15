@@ -10,7 +10,7 @@ addrmap test {
       //desc = "ff";
 
       field test {} f1;
-   };
+   } hiya;
 
    reg {
       field {} a[2];

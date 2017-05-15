@@ -15,11 +15,11 @@ type Identifier = String
 type SymTab2 a = M.Map Scope (M.Map Identifier a)
 
 empty         = M.empty
-add  t s n d  = t &  at s . non (M.empty) . at n ?~ d
+add  t s n d  = t &  at s . non M.empty . at n ?~ d
 lkup t s n    =
-    case t ^. at s . non (M.empty) . at n of
+    case t ^. at s . non M.empty . at n of
         Just a -> Just (s, a)
-        Nothing -> if s == [] then Nothing else lkup t (init s) n
+        Nothing -> if null s then Nothing else lkup t (init s) n
 
 
 

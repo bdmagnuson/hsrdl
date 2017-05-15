@@ -1,4 +1,5 @@
 module srdlField #(
+   parameter RESET        = 0,
    parameter WIDTH        = 1,
    parameter RCLR         = 0,
    parameter RSET         = 1,
@@ -7,63 +8,82 @@ module srdlField #(
    parameter COUNTER      = 0,
    parameter INCRWIDTH    = 1,
    parameter DECRWIDTH    = 1,
+   parameter NEXT         = 0
 ) (
-   input [WIDTH - 1:0] d,
-   input [WIDTH - 1:0] sw_wdata,
-   input [WIDTH - 1:0] hw_wdata,
-   input               hw_we,
-   input               rd,
-   input               wr,
-   input               acc,
+   input wire               clk,
+   input wire               rst_l,
+
+   input wire [WIDTH - 1:0] next_in,
+   input wire [WIDTH - 1:0] sw_wdata,
+   input wire [WIDTH - 1:0] hw_wdata,
+   input wire               hw_we,
+   input wire               rd,
+   input wire               wr,
+   input wire               acc,
 
    //Counter props
-   input               incr,
-   input               decr,
-   input [INCRWIDTH - 1:0] incrvalue,
-   input [DECRWIDTH - 1:0] decrvalue,
-   output              overflow,
-   output              underflow,
+   input wire               incr,
+   input wire               decr,
+   input wire [INCRWIDTH - 1:0] incrvalue,
+   input wire [DECRWIDTH - 1:0] decrvalue,
+   output reg              overflow,
+   output reg              underflow,
 
-   input   [WIDTH-1:0] incrsaturate_lhs,
-   input   [WIDTH-1:0] incrthreshold_lhs,
-   input   [WIDTH-1:0] decrsaturate_lhs,
-   input   [WIDTH-1:0] decrthreshold_lhs,
+   input wire   [WIDTH-1:0] incrsaturate_lhs,
+   input wire   [WIDTH-1:0] incrthreshold_lhs,
+   input wire   [WIDTH-1:0] decrsaturate_lhs,
+   input wire   [WIDTH-1:0] decrthreshold_lhs,
 
-   output   [WIDTH-1:0] rhscrsaturate_rhs,
-   output   [WIDTH-1:0] rhscrthreshold_rhs,
-   output   [WIDTH-1:0] decrsaturate_rhs,
-   output   [WIDTH-1:0] decrthreshold_rhs,
+   output reg   [WIDTH-1:0] rhscrsaturate_rhs,
+   output reg   [WIDTH-1:0] rhscrthreshold_rhs,
+   output reg   [WIDTH-1:0] decrsaturate_rhs,
+   output reg   [WIDTH-1:0] decrthreshold_rhs,
 
-   output [WIDTH - 1:0] q,
+   output reg [WIDTH - 1:0] q,
 );
 
+reg [WIDTH - 1:0] next;
+
+always @(posedge clk)
+   if (!rst_l)
+      q <= RESET;
+   else
+      q <= next;
+
 always_comb begin
-   q = d;
+   incrthreshold_rhs = q == incrthreshold_lhs;
+   decrthreshold_rhs = q == decrthreshold_lhs;
+   incrsaturate_rhs  = q == incrsaturate_lhs;
+   decrsaturate_rhs  = q == decrsaturate_lhs;
+end
+
+always_comb begin
+   next = q;
 
    if (RCLR && rd && acc)
-      q = '0;
+      next = '0;
 
    if (RSET && rd && acc)
-      q = '1;
+      next = '1;
 
    if (wr && (SW == "rw" || SW == "wr" || SW == "W")) begin
       if (WOSET)
-         q = q |  wdata;
+         next = next |  wdata;
       else if (WOCLR)
-         q = q & ~wdata;
+         next = next & ~wdata;
       else
-         q = wdata;
+         next = wdata;
    end else if (SINGLEPULSE) begin
-      q = 0;
+      next = 0;
    end
 
    if (HW == "rw" || HW == "wr" || HW == "W") begin
       if (WE && hw_we)
-         q = hw_wdata;
+         next = hw_wdata;
       else if (WEL && !hw_we)
-         q = hw_wdata;
+         next = hw_wdata;
       else
-         q = hw_wdata;
+         next = hw_wdata;
    end
 
    underflow = 0
@@ -71,37 +91,36 @@ always_comb begin
    if (COUNTER) begin
       case (decr, incr)
          2'b01 : begin
-            {wrap, q} = q + incrvalue;
-            if (wrap || q > incrsaturate_lhs)
-               q = incrsaturate_lhs;
+            {wrap, next} = next + incrvalue;
+            if (wrap || next > incrsaturate_lhs)
+               next = incrsaturate_lhs;
             overflow = wrap;
          end
          2'b10 : begin
-            {wrap, q} = q - decrvalue;
-            if (wrap || q < decrsaturate_lhs)
-               q = decrsaturate_lhs;
+            {wrap, next} = next - decrvalue;
+            if (wrap || next < decrsaturate_lhs)
+               next = decrsaturate_lhs;
             underflow = wrap;
          end
-         2'b11 : {wrap, q} = q + incrvalue - decrvalue;
-            {wrap, q} = q + incrvalue - decrvalue;
+         2'b11 : {wrap, next} = next + incrvalue - decrvalue;
+            {wrap, next} = next + incrvalue - decrvalue;
             if (wrap) begin
                underflow = decrvalue > incrvalue;
                overflow  = decrvalue < incrvalue;
             end
-            if (underflow || q < decrsaturate_lhs)
-               q = decrsaturate_lhs;
-            if (overflow  || q > incrsaturate_lhs)
-               q = incrsaturate_lhs;
+            if (underflow || next < decrsaturate_lhs)
+               next = decrsaturate_lhs;
+            if (overflow  || next > incrsaturate_lhs)
+               next = incrsaturate_lhs;
          end
          default : begin end
       endcase
-      incrthreshold_rhs = q = incrthreshold_lhs;
-      decrthreshold_rhs = q = decrthreshold_lhs;
-      incrsaturate_rhs  = q = incrsaturate_lhs;
-      decrsaturate_rhs  = q = decrsaturate_lhs;
    end
 
    if (hwclr)
-      q = 'b0;
+      next = 'b0;
+
+   if (NEXT)
+      next = next_in;
 end
 

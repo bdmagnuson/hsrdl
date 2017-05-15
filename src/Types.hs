@@ -32,7 +32,7 @@ data SymTab a = SymTab Int (M.Map String a)
 
 data PathElem = PathElem {
     peName  :: String,
-    array :: (Maybe Array)
+    array   :: Maybe Array
 } deriving (Show, Eq)
 
 data ExprF a =
@@ -110,7 +110,7 @@ data CompType =
    | Signal
    | Array deriving (Ord,Eq)
 
-instance Show (CompType) where
+instance Show CompType where
    show Addrmap = "addrmap"
    show Regfile = "regfile"
    show Reg     = "reg"
