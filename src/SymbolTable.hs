@@ -1,23 +1,25 @@
-
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleContexts #-}
 module SymbolTable (
-      empty,
-      pop,
-      push,
       lkup,
       add,
-      SymTab
+      SymTab,
+      empty
    ) where
 
 import qualified Data.Map.Strict as M
-import Control.Monad
+import Control.Lens
 
-type SymTab a b = [M.Map a b]
+type Scope = [String]
+type Identifier = String
+type SymTab a = M.Map Scope (M.Map Identifier a)
 
-empty           = [M.empty]
-pop (x:xs)      = xs
-push            = (:) M.empty
-add n d (x:xs)  = (M.insert n d x) : xs
-lkup n x        = msum $ map (M.lookup n)  x
+empty         = M.empty
+add  t s n d  = t &  at s . non M.empty . at n ?~ d
+lkup t s n    =
+    case t ^. at s . non M.empty . at n of
+        Just a -> Just (s, a)
+        Nothing -> if null s then Nothing else lkup t (init s) n
 
 
 

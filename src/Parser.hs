@@ -24,7 +24,7 @@ import Control.Monad.Trans.Class
 
 import Props
 import Types
-import qualified SymbolTable2 as SA
+import qualified SymbolTable as S
 
 data ParseLoc =
       CHILD
@@ -34,7 +34,7 @@ data ParseState = ParseState {
     loc      :: ParseLoc,
     nam      :: String,
     anonIdx :: Int,
-    syms     :: SA.SymTab2 (Expr SourcePos),
+    syms     :: S.SymTab (Expr SourcePos),
     topInst  :: [String]
 } deriving (Show)
 
@@ -114,7 +114,7 @@ parseCompDef = do
    env   <- ask
    when ((cType == Addrmap) && (level env == 0)) (lift (modify (\s -> s {topInst = topInst s ++ [name]})))
    let def = pos :< CompDef cType name expr
-   lift (modify $ \s -> s { syms = SA.add (syms s) (scope env) name def})
+   lift (modify $ \s -> s { syms = S.add (syms s) (scope env) name def})
    _ <- try semi <|> do
                         lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
                         return ""
@@ -145,7 +145,7 @@ parseCompInst = do
    pos  <- getPosition
    name <- parseIdentifier
    arr  <- optional parseArray
-   _    <- f $ SA.lkup (syms s) (scope env) (nam s)
+   _    <- f $ S.lkup (syms s) (scope env) (nam s)
    return $ pos :< CompInst (nam s) name arr []
         where f (Just ([""], _ :< CompDef t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
                                                        return ()

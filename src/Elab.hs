@@ -23,7 +23,7 @@ import Control.Lens hiding ((:<))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 
-import SymbolTable2 as S
+import SymbolTable as S
 import Data.Functor.Foldable
 import Data.Maybe (isJust)
 import Props
@@ -69,7 +69,7 @@ emptyMsgs = Msgs [] [] []
 
 data ReaderEnv = ReaderEnv {
     _scope  :: [String],
-    _syms   :: S.SymTab2 (Expr SourcePos),
+    _syms   :: S.SymTab (Expr SourcePos),
     _sprops :: M.Map CompType (M.Map String Property)
 }
 
