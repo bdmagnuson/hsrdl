@@ -2,13 +2,14 @@ module srdlField #(
    parameter RESET        = 0,
    parameter WIDTH        = 1,
    parameter RCLR         = 0,
-   parameter RSET         = 1,
+   parameter RSET         = 0,
    parameter SW           = "rw",
-   parameter HW           = "rw",
+   parameter HW           = "r",
    parameter COUNTER      = 0,
    parameter INCRWIDTH    = 1,
    parameter DECRWIDTH    = 1,
-   parameter NEXT         = 0
+   parameter NEXT         = 0,
+   parameter INTR         = "NONE"
 ) (
    input wire               clk,
    input wire               rst_l,
@@ -20,6 +21,11 @@ module srdlField #(
    input wire               rd,
    input wire               wr,
    input wire               acc,
+   input wire               hwset,
+   input wire               hwclr,
+
+   output reg               intr,
+   input wire               reg_intr,
 
    //Counter props
    input wire               incr,
@@ -43,12 +49,22 @@ module srdlField #(
 );
 
 reg [WIDTH - 1:0] next;
+reg [WIDTH - 1:0] sticky_mask, r_sticky_mask;
+reg [WIDTH - 1:0] hw_wdata_mask;
+reg               r_intr;
 
 always @(posedge clk)
-   if (!rst_l)
+   if (!rst_l) begin
       q <= RESET;
-   else
+      r_sticky_mask <= '0;
+      r_intr <= 'b0;
+   end else begin
       q <= next;
+      r_sticky_mask <= sticky_mask;
+      if (!NONSTICKY)
+         r_intr <= intr;
+   end
+end
 
 always_comb begin
    incrthreshold_rhs = q == incrthreshold_lhs;
@@ -58,32 +74,43 @@ always_comb begin
 end
 
 always_comb begin
-   next = q;
+   next        = q;
+   sticky_mask = r_sticky_mask || {WIDTH{STICKY && reg_intr}};
+   intr        = r_intr;
 
-   if (RCLR && rd && acc)
+   if (RCLR && rd && acc) begin
       next = '0;
+      sticky_mask = '0;
+      intr = '0;
+   end
 
    if (RSET && rd && acc)
       next = '1;
 
    if (wr && (SW == "rw" || SW == "wr" || SW == "W")) begin
-      if (WOSET)
+      if (WOSET) begin
          next = next |  wdata;
-      else if (WOCLR)
+      end else if (WOCLR)
          next = next & ~wdata;
-      else
+         intr = intr & (next != 0);
+         sticky_mask = sticky_mask & ~wdata;
+      else begin
          next = wdata;
+         intr = 0;
+         sticky_mask = '0;
+      end
    end else if (SINGLEPULSE) begin
       next = 0;
    end
 
    if (HW == "rw" || HW == "wr" || HW == "W") begin
+      hw_wdata_mask = (next & r_sticky_mask) | (hw_wdata & ~r_sticky_mask);
       if (WE && hw_we)
-         next = hw_wdata;
+         next = hw_wdata_mask;
       else if (WEL && !hw_we)
-         next = hw_wdata;
+         next = hw_wdata_mask;
       else
-         next = hw_wdata;
+         next = hw_wdata_mask;
    end
 
    underflow = 0
@@ -118,9 +145,24 @@ always_comb begin
    end
 
    if (hwclr)
-      next = 'b0;
+      next = '0;
+
+   if (hwset)
+      next = '1;
 
    if (NEXT)
       next = next_in;
+
+   if (STICKYBIT)
+      sticky_mask |= next;
+
+   case (INTR)
+      "LEVEL"    : intr = |next;
+      "POSEDGE"  : intr = |next && ~|d
+      "NEGEDGE"  : intr = ~|next && |d;
+      "BOTHEDGE" : intr = next != d;
+      "NONE"     : intr = 0;
+      default    : intr = 0;
+   endcase
 end
 

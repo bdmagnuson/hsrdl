@@ -4,8 +4,7 @@
 module Parser (
        rws
      , SourcePos
-     , hsrdlParseFile
-     , t, s, ret
+     , parseFile
      ) where
 
 import GHC.IO
@@ -145,8 +144,9 @@ parseCompInst = do
    pos  <- getPosition
    name <- parseIdentifier
    arr  <- optional parseArray
+   align <- parseAlign
    _    <- f $ S.lkup (syms s) (scope env) (nam s)
-   return $ pos :< CompInst (nam s) name arr []
+   return $ pos :< CompInst (nam s) name arr align
         where f (Just ([""], _ :< CompDef t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
                                                        return ()
               f _ = return ()
@@ -169,37 +169,61 @@ pathElem = do
    arr <- optional parseArray1
    return $ PathElem id arr
 
-parsePropAssign = try parseDefPropAssign <|> try parseExpPropAssign <|> try parsePostPropAssign
+parsePropAssign =
+      try parseIntr
+  <|> try parsePropAssign'
+  <|> try parsePostPropAssign
 
-parseDefPropAssign = do
-   pos <- getPosition
-   prop <- parseIdentifier
-   semi
-   return $ pos :< PropAssign [] prop (PropBool True)
+parseIntr = do
+  pos <- getPosition
+  d <- optional (join parseRsvdRet "default")
+  s <- option Sticky (parseRsvdRet "nonsticky" NonSticky)
+  t <- option Level (    parseRsvdRet "level" Level
+                     <|> parseRsvdRet "bothedge" Bothedge
+                     <|> parseRsvdRet "posedge" Posedge
+                     <|> parseRsvdRet "negedge" Negedge)
+  rword "intr"
+  semi
+  case d of
+    Nothing -> return $ pos :< PropAssign [] "intr" (PropIntr s t)
+    Just _ -> return $ pos :< PropDefault "intr" (PropIntr s t)
 
-parseExpPropAssign = do
-   pos <- getPosition
+
+parsePropAssign' = do
+   pos  <- getPosition
+   d    <- optional (join parseRsvdRet "default")
    prop <- parseIdentifier
-   equal
-   rhs  <- parseRHS
+   rhs  <- option (PropBool True) (equal *> (parseRHS prop))
    semi
-   return $ pos :< PropAssign [] prop rhs
+   case d of
+     Nothing -> return $ pos :< PropAssign [] prop rhs
+     Just _  -> return $ pos :< PropDefault prop rhs
 
 parsePostPropAssign = do
    pos <- getPosition
    path <- pathElem `sepBy` dot
    prop <- dref *> parseIdentifier
    equal
-   rhs <- parseRHS
+   rhs <- parseRHS prop
    semi
    return $ pos :< PropAssign path prop rhs
+
+parseAlign = do
+ (at, mod, stride) <- makePermParser $ (,,) <$?> (Nothing, p1) <|?> (Nothing, p2) <|?> (Nothing, p3)
+ case (at, mod, stride) of
+   (Just _, Just _, _) -> fail "@ and %= operators are mutualy exclusive"
+   otherwise -> return $ Alignment at mod stride
+ where
+    p1 = do a <- char '@' *> parseNumeric; return (Just a)
+    p2 = do a <- symbol "%=" *> parseNumeric; return (Just a)
+    p3 = do a <- symbol "+=" *> parseNumeric; return  (Just a)
 
 parsePropDefBody = makePermParser $ (,,) <$$> p1 <||> p2 <|?> (Nothing, p3)
    where
       p1 = rword "type" *> equal *> parseType <* semi
       p2 = rword "component" *> equal *> sepBy1 parseCompType pipe <* semi
       p3 = do
-         rhs <- rword "default" *> equal *> parseRHS <* semi
+         rhs <- rword "default" *> equal *> (parseRHS "") <* semi
          return $ Just rhs
       parseType =
            parseRsvdRet "string"  PropLitT
@@ -215,18 +239,23 @@ parsePropDef = do
    semi
    return $ pos :< PropDef id t c d
 
+parseNumeric = lexeme L.decimal
 
-parseRHS =
-   parseLit <|> parseNum <|> try parseBool
+parseRHS prop = if isEnum prop then parseEnum else parseLit <|> parseNum <|> try parseBool
    where parseLit = do
             a <- between dquote dquote (many (noneOf "\""))
             return $ PropLit a
          parseNum = do
-            a <- L.decimal
+            a <- parseNumeric
             return $ PropNum a
          parseBool = do
             a <- rword "true" *> return True <|> rword "false" *> return False
             return $ PropBool a
+         parseEnum = do
+            a <- between dquote dquote (many (noneOf "\""))
+            case a `elem` (getEnumValues prop) of
+              False -> fail $ "Legal values for " ++ prop ++ " are " ++ show (getEnumValues prop)
+              True -> return (PropEnum a)
 
 rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "alias", "alignment", "all", "anded", "arbiter", "async", "bigendian",
@@ -250,12 +279,20 @@ pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" 0 M
 
 hsrdlParseFile file = runParser pp file <$> readFile file
 
-a = hsrdlParseFile "test/srdl/user_prop.srdl" 
-b = unsafePerformIO a
-f (Right a) = a
-(t, s) = f b
+parseFile file = do
+  p <- hsrdlParseFile file
+  case p of
+    Left err -> do
+      putStrLn (parseErrorPretty err)
+      return Nothing
+    Right (t, s) -> return $ Just (topInst s, syms s)
 
-ret = (topInst s, syms s)
+--a = hsrdlParseFile "test/srdl/user_prop.srdl" 
+--b = unsafePerformIO a
+--f (Right a) = a
+--(t, s) = f b
+--
+--ret = (topInst s, syms s)
 
 
 

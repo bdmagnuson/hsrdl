@@ -6,6 +6,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
 module Backends.Verilog (
+   verilog'
    ) where
 
 import Control.Monad (msum)
@@ -122,6 +123,10 @@ arrayLR f
     where m = f ^. fmsb
           l = f ^. flsb
 
+arrayLR' f = P.brackets (P.integer m <> P.colon <> P.integer l)
+    where m = f ^. fmsb
+          l = f ^. flsb
+
 getProp  e p a = e ^? rprops . ix p . _Just . a
 getfProp e p a = e ^? fprops . ix p . _Just . a
 
@@ -130,7 +135,7 @@ getNumProp   e p = getProp  e p _PropNum
 getfNumProp  e p = getfProp e p _PropNum
 getfBoolProp e p = getfProp e p _PropBool
 
-getfEnumProp e p | Just (_ ,v) <- getfProp e p _PropEnum = Just v
+getfEnumProp e p | Just (v) <- getfProp e p _PropEnum = Just v
 getfEnumProp e p | Nothing  <- getfProp e p _PropEnum = error p
 
 
@@ -186,7 +191,7 @@ isInput (Input _ _)   = True
 isInput _             = False
 isOutput (Output _ _) = True
 isOutput _            = False
-isWire (Wire _ _)   = True
+isWire (Wire _ _)     = True
 isWire _              = False
 
 sig2wire EmptyS       = ""
@@ -207,7 +212,7 @@ getfprop e p =
     Just (PropBool False) -> Just (Lit "0")
     Just (PropRef a _)    -> Just (Wire "ref!" 1)
     Just (PropPath a)     -> Just (Wire "path!" 1)
-    Just (PropEnum _ e)   -> Just (Lit e)
+    Just (PropEnum e)     -> Just (Lit e)
 
 
 fieldInst :: FieldInfo -> ([Sigs], StringTemplate Doc)
@@ -266,14 +271,14 @@ fieldInst f = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplat
                              ]
 
 
-verilog' x = P.vcat $ intersperse P.empty [mheader, wires, insts, readMux r, P.text "endmodule", P.empty]
+verilog' x = P.vcat $ intersperse P.empty [mheader]--, wires, insts, readMux r, P.text "endmodule", P.empty]
   where r = getRegs x
         f = concatMap (^. rfields) r
         (sigs, fields) = unzip (map fieldInst f) & _1 %~ concat
         insts = P.vcat $ map render fields
         mheader = header' (x ^. _Fix . name) sigs
         wires = P.vcat $ map ff (filter isWire sigs)
-        ff (Wire a w) = P.text "wire" <+> arrayWi w <+> P.text a
+        ff (Wire a w) = P.text "wire" <+> arrayWi w <+> P.text a <> P.semi
 
 
 header' n sigs = block d1 (P.text ");") 3 (P.vcat $ map1 f1 f2 (filter (\x -> isInput x || isOutput x) sigs))
@@ -288,10 +293,5 @@ readMux r = alwaysComb $ P.vcat $ intersperse P.empty [swaccDefault, swaccAssign
     swaccAssign   = ifBlock (P.text "rd || wr") (caseBlock (P.text "addr") $ map (\r -> caseItem (getAddress r) [swaccName r <> P.text " = 1'b1;"]) r)
     swaccName x   = P.char '_' <> P.text (x ^. rname) <> P.text "_swacc"
     getAddress x  = P.integer $ fromJust (getNumProp x "address")
-    readAssign    = caseBlock (P.text "1'b1") (map (\r -> caseItem (swaccName r) (map swaccFields (r ^. rfields))) r)
-    swaccFields f = P.text "rdata" <> arrayLR f <+> P.text (f ^. fname) <> P.semi
-
-
-
-fields = concatMap (^. rfields) (getRegs out)
-f1 = fields !! 0
+    readAssign    = P.text "rdata = 0;" P.<$$> caseBlock (P.text "1'b1") (map (\r -> caseItem (swaccName r) (map swaccFields (r ^. rfields))) r)
+    swaccFields f = P.text "rdata" <> arrayLR' f <+> P.equals <+> P.text (f ^. fname) <> P.semi

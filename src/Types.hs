@@ -4,7 +4,7 @@
 module Types (
    ExprF(..)
  , Expr
- , Alignment
+ , Alignment (..)
  , PathElem(..)
  , SymTab(..)
  , PropRHS(..)
@@ -16,6 +16,8 @@ module Types (
  , ElabF (..)
  , ptype
  , pdefault
+ , IsSticky (..)
+ , IntrType (..)
  ) where
 
 import Control.Comonad.Cofree
@@ -45,13 +47,17 @@ data ExprF a =
         def    :: String,
         name   :: String,
         arr    :: Maybe Array,
-        align  :: [Alignment]
+        align  :: Alignment
      }
    | PropDef {
         name     :: String,
         propType :: PropType,
         ctypes   :: [CompType],
         value    :: Maybe PropRHS
+     }
+   | PropDefault {
+        prop  :: String,
+        rhs   :: PropRHS
      }
    | PropAssign {
         path  :: [PathElem],
@@ -65,10 +71,11 @@ data ExprF a =
 
 type Expr a = Cofree ExprF a
 
-data Alignment =
-     At Integer
-   | Mod Integer
-   | Stride Integer deriving (Show, Eq)
+data Alignment = Alignment
+  { _alignAt     :: Maybe Integer
+  , _alignMod    :: Maybe Integer
+  , _alignStride :: Maybe Integer
+  } deriving (Show, Eq)
 
 data Array =
      ArrWidth {
@@ -78,29 +85,6 @@ data Array =
        left :: Integer,
        right :: Integer
      } deriving (Show,Eq)
-
-
---collapseMaybe :: [Maybe a] -> Maybe [a]
---collapseMaybe [] = Just []
---collapseMaybe (x:xs) = (:) <$> x <*> (collapseMaybe xs)
---
---assignBits x = (msb - 1, traverse id g)
---    where (g, (msb, _)) = runState (sequence (map f x)) (0, Set.empty)
---          f :: Array -> State (Integer, Set.Set Integer) (Either String Array)
---          f a@(ArrLR l r) = do
---            (_, used) <- get
---            let set          = Set.fromList [r..l]
---            let intersection = Set.intersection used set
---            let union        = Set.union used set
---            if null intersection
---                then do
---                    put (l + 1, union)
---                    return $ Right a
---                else return (Left ("Field overlap on bits " ++ (show . Set.toList) intersection))
---          f (ArrWidth w) = do
---            (lsb, used) <- get
---            put (lsb + w, Set.union used (Set.fromList [lsb..(lsb + w - 1)]))
---            return $ Right $ ArrLR {left = lsb + w - 1, right = lsb}
 
 data CompType =
      Addrmap
@@ -119,7 +103,6 @@ instance Show CompType where
    show Array   = "array"
 
 data EnumDef = EnumDef {
-   ename   :: String,
    values :: M.Map Identifier Integer
 } deriving (Show,Eq)
 
@@ -129,7 +112,20 @@ data PropType =
    | PropBoolT
    | PropRefT
    | PropPathT
-   | PropEnumT EnumDef deriving (Show,Eq)
+   | PropIntrT
+   | PropEnumT deriving (Eq)
+
+instance Show PropType where
+  show PropLitT  = "String"
+  show PropNumT  = "Numeric"
+  show PropBoolT = "Boolean"
+  show PropRefT  = "Reference"
+  show PropPathT = "Path"
+  show PropIntrT = "intr"
+  show PropEnumT = "Enumeration"
+
+data IsSticky = Sticky | NonSticky deriving (Show, Eq)
+data IntrType = Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
 
 data PropRHS =
      PropLit  String
@@ -137,7 +133,8 @@ data PropRHS =
    | PropBool Bool
    | PropRef  ElemPath Identifier
    | PropPath ElemPath
-   | PropEnum EnumDef Identifier deriving (Show,Eq)
+   | PropIntr IsSticky IntrType
+   | PropEnum Identifier deriving (Show,Eq)
 
 data Property = Property {
    _ptype    :: PropType,
