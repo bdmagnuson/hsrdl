@@ -22,7 +22,7 @@ import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
 
 import Props
-import Types
+import Types hiding (ElabF)
 import qualified SymbolTable as S
 
 data ParseLoc =
@@ -32,7 +32,8 @@ data ParseLoc =
 data ParseState = ParseState {
     loc      :: ParseLoc,
     nam      :: String,
-    anonIdx :: Int,
+    ext      :: Maybe Bool,
+    anonIdx  :: Int,
     syms     :: S.SymTab (Expr SourcePos),
     topInst  :: [String]
 } deriving (Show)
@@ -67,7 +68,7 @@ data ReaderEnv = ReaderEnv {
 }
 
 rword :: String -> ReaderT ReaderEnv (StateT ParseState Parser) ()
-rword w = string w *> notFollowedBy alphaNumChar *> sc
+rword w = lexeme $ string w *> notFollowedBy alphaNumChar *> sc
 
 braces = between lbrace rbrace
 
@@ -89,7 +90,7 @@ parseExpr = do
                 return a
             c = comma
       CHILD ->
-            parseCompDef
+            (try parseCompDef)
         <|> parsePropAssign
         <|> parsePropDef
         <|> parseExpCompInst
@@ -107,12 +108,13 @@ addTopDef c name = do
 
 parseCompDef = do
    pos   <- getPosition
+   ext   <- optional (parseRsvdRet "external" True <|> parseRsvdRet "internal" False)
    cType <- parseCompType
    name  <- parseCompName
    expr  <- withReaderT (\s -> s {level = level s + 1, scope = scope s ++ [name]}) $ braces $ many parseExpr
    env   <- ask
    when ((cType == Addrmap) && (level env == 0)) (lift (modify (\s -> s {topInst = topInst s ++ [name]})))
-   let def = pos :< CompDef cType name expr
+   let def = pos :< CompDef ext cType name expr
    lift (modify $ \s -> s { syms = S.add (syms s) (scope env) name def})
    _ <- try semi <|> do
                         lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
@@ -134,8 +136,9 @@ parseRsvdRet a b = do
 
 parseExpCompInst = do
    pos  <- getPosition
+   ext' <- optional (parseRsvdRet "external" True <|> parseRsvdRet "internal" False)
    inst <- parseIdentifier
-   lift (modify $ \s -> s { loc = ANON_DEF, nam = inst })
+   lift (modify $ \s -> s { loc = ANON_DEF, nam = inst, Parser.ext = ext' })
    parseExpr
 
 parseCompInst = do
@@ -146,9 +149,9 @@ parseCompInst = do
    arr  <- optional parseArray
    align <- parseAlign
    _    <- f $ S.lkup (syms s) (scope env) (nam s)
-   return $ pos :< CompInst (nam s) name arr align
-        where f (Just ([""], _ :< CompDef t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
-                                                       return ()
+   return $ pos :< CompInst (Parser.ext s) (nam s) name arr align
+        where f (Just ([""], _ :< CompDef _ t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
+                                                         return ()
               f _ = return ()
 
 parseArray = try parseArray1 <|> parseArray2
@@ -275,7 +278,7 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" 0 M.empty [])
+pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" Nothing 0 M.empty [])
 
 hsrdlParseFile file = runParser pp file <$> readFile file
 

@@ -39,11 +39,13 @@ data PathElem = PathElem {
 
 data ExprF a =
      CompDef   {
+        ext   :: Maybe Bool,
         ctype  :: CompType,
         name   :: String,
         expr   :: [a]
      }
    | CompInst {
+        ext    :: Maybe Bool,
         def    :: String,
         name   :: String,
         arr    :: Maybe Array,
@@ -149,8 +151,11 @@ data ElabF a = ElabF {
     _etype :: CompType,
     _name  :: String,
     _props :: M.Map String (Maybe PropRHS),
+    _ext   :: Bool,
     _inst  :: [a],
     _lsb   :: Integer,
     _msb   :: Integer
 } deriving (Show, Functor, Traversable, Foldable)
+
+
 

@@ -57,6 +57,7 @@ p_woset         = ("woset",         defFalse)
 p_wel           = ("wel",           defFalse)
 p_swacc         = ("swacc",         defFalse)
 p_swmod         = ("swmod",         defFalse)
+p_sharedextbus  = ("sharedextbus",  defFalse)
 p_singlepulse   = ("singlepulse",   defFalse)
 p_incrvalue     = ("incrvalue",     defOne)
 p_decrvalue     = ("decrvalue",     defOne)
@@ -104,15 +105,18 @@ defDefs = M.fromList [
    (Reg,     M.fromList [ p_desc
                         , p_name
                         , p_intr
+                        , p_sharedextbus
                         ]),
 
    (Regfile, M.fromList [ p_desc
-                          , p_name
-                          ]),
+                        , p_name
+                        , p_sharedextbus
+                        ]),
 
    (Addrmap, M.fromList [ p_desc
-                          , p_name
-                          ])]
+                        , p_name
+                        , p_sharedextbus
+                        ])]
 
 
 

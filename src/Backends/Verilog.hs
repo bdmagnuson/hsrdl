@@ -5,11 +5,12 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
-module Backends.Verilog (
-   verilog'
-   ) where
+module Backends.Verilog
+  ( verilog'
+  , fff
+  ) where
 
-import Control.Monad (msum)
+import Control.Monad (msum, join)
 import Data.Functor.Foldable
 import Text.StringTemplate
 import Control.Lens
@@ -18,6 +19,7 @@ import qualified Data.Map.Strict as M
 
 import Text.PrettyPrint.Leijen (Doc, (<>), (<+>))
 import qualified Text.PrettyPrint.Leijen as P
+import Debug.Trace
 
 import Elab
 import Types (ElabF(..), CompType(..), PropRHS(..))
@@ -57,30 +59,46 @@ data RegInfo = RegInfo {
 makeLenses ''RegInfo
 
 
+filterExt :: Fix ElabF -> [(Integer, Integer)]
+filterExt  x = cata f x
+  where f a@(ElabF Field n p e i l m) = []
+        f a@(ElabF Array n p e i l m) = concat i
+        f a@(ElabF t n p e i l m) =
+          case fromJust $ ((trace (show n) p) ^? ix "sharedextbus" . _Just . _PropBool) of
+            True  -> case (minimumOf (traverse . _1) childRanges,
+                           maximumOf (traverse . _2) childRanges) of
+              (Nothing, _) -> []
+              (_, Nothing) -> []
+              (Just a, Just b) -> [(a, b)]
+            False -> case (t, e) of
+                       (Reg, False) -> []
+                       (Reg, True) -> [(l, l)]
+                       otherwise -> concat i
+          where
+            childRanges = concat i
+            l = fromJust $ p ^? ix "address" . _Just . _PropNum
+            getAddress x  = fromJust (getNumProp x "address")
 
--- io direction width signal
--- internal signal
--- readmux
---   address fields
+data RegsFilter = FilterInternal | FilterExternal | FilterNone
 
-
-getRegs' :: Fix ElabF -> [RegInfo]
-getRegs' (Fix (ElabF t n p i l m)) =
+getRegs' :: RegsFilter -> Fix ElabF -> [RegInfo]
+getRegs' fe (Fix (ElabF t n p ext i l m)) =
   case t of
-    Reg -> [RegInfo {
-      _rname   = n,
-      _rprops  = p,
-      _rfields = concatMap getFields i
-    }]
-    Addrmap   -> concatMap getRegs' i
-    Array     -> map (\x -> x & rname %~ \x -> n ++ x)         (concatMap getRegs' i)
-    _ -> map (\x -> x & rname %~ \x -> n ++ "_" ++ x)  (concatMap getRegs' i)
+    Reg -> case fe of
+      FilterNone -> r
+      FilterInternal -> if ext then [] else r
+      FilterExternal -> if ext then r else []
+    Addrmap   -> concatMap (getRegs' fe)  i
+    Array     -> map (\x -> x & rname %~ \x -> n ++ x)         (concatMap (getRegs' fe) i)
+    _ -> map (\x -> x & rname %~ \x -> n ++ "_" ++ x)  (concatMap (getRegs' fe) i)
+    where 
+      r = [RegInfo {_rname = n, _rprops = p, _rfields = concatMap getFields i}]
 
-getRegs x = map f (getRegs' x)
+getRegs fe x = map f (getRegs' fe x)
     where f a = a & rfields %~ map (\x -> x & fname %~ (\y -> a ^. rname ++ "__" ++ y))
 
 getFields :: Fix ElabF -> [FieldInfo]
-getFields (Fix (ElabF Field n p i l m)) =
+getFields (Fix (ElabF Field n p ext i l m)) =
   [FieldInfo {
     _fname  = n,
     _fprops = p,
@@ -271,8 +289,10 @@ fieldInst f = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplat
                              ]
 
 
+fff x = show (filterExt x)
+
 verilog' x = P.vcat $ intersperse P.empty [mheader]--, wires, insts, readMux r, P.text "endmodule", P.empty]
-  where r = getRegs x
+  where r = getRegs FilterInternal x
         f = concatMap (^. rfields) r
         (sigs, fields) = unzip (map fieldInst f) & _1 %~ concat
         insts = P.vcat $ map render fields

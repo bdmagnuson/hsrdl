@@ -30,7 +30,7 @@ import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
 
 import SymbolTable as S
 import Data.Functor.Foldable
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, fromMaybe)
 import Props
 import Parser
 import Types
@@ -76,6 +76,7 @@ type Elab = Fix ElabF
 
 
 data ReaderEnv = ReaderEnv {
+    _rext   :: Maybe Bool,
     _scope  :: [String],
     _syms   :: S.SymTab (Expr SourcePos)
 }
@@ -134,36 +135,38 @@ modifyDefs prop rhs = do
     return ()
 
 instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
-instantiate (pos :< CompInst d n arr align@(Alignment at' mod stride)) = do
+instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
     env <- ask
+    sp <- lift (use sprops)
     case S.lkup (env ^. syms) (env ^. scope) d of
         Nothing -> do
             logMsg err pos ("Lookup failure: " ++ show d ++ " in " ++ show (env ^. scope))
             return Nothing
-        Just (sc, _ :< def) ->
+        Just (sc, _ :< def) -> do
           case (ctype def, arr) of
             (Field, _)      -> foo newinst >>= assignBits pos arr
             (_, Just (ArrWidth w)) -> do b <- elmAddr
-                                         x <- fmap (traverse id) $ mapM (\x -> instantiate (pos :< CompInst d (show x) Nothing (arrAlign b x))) [0..(w-1)]
+                                         x <- fmap (traverse id) $ mapM (\x -> instantiate (pos :< CompInst isext d (show x) Nothing (arrAlign b x))) [0..(w-1)]
                                          case x of
                                            Nothing -> return Nothing
-                                           Just ff -> ereturn $ ElabF Array n M.empty ff 0 0
+                                           Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0
                                          where arrAlign b x = Alignment ((\y -> b + x * y) <$> stride) Nothing Nothing
             (Reg, Nothing) -> foo (newinst >>= assignAddress) <* incrAddress <* resetBits
             otherwise -> setBaseAddress *> foo newinst <* incrAddress
          where
+           isext = msum [env ^. rext, Types.ext def, iext]
            foo x   = do
                        withReaderT newenv  $ pushDefs *> foldl (>>=) x (map elaborate (expr def)) <* popDefs
-                       where newenv = (scope .~ (sc ++ [d]))
-           newinst = do
-                       sp <- lift (use sprops)
-                       ereturn ElabF {
-                       _etype = ctype def,
-                       _name  = n,
-                       _props =  M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList ((head sp) ^. at (ctype def) . _Just)),
-                       _inst  = [],
-                       _lsb   = 0,
-                       _msb   = 0}
+                       where newenv = (scope .~ (sc ++ [d])) . (rext .~ isext)
+           newinst =
+             ereturn ElabF {
+             _etype = ctype def,
+             _name  = n,
+             _props =  M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList ((head sp) ^. at (ctype def) . _Just)),
+             _inst  = [],
+             _ext   = fromMaybe False isext,
+             _lsb   = 0,
+             _msb   = 0}
            elmAddr = do
              curAddr <- lift (use addr)
              baseAddr <- lift (use baseAddr)
@@ -186,7 +189,7 @@ instantiate (pos :< CompInst d n arr align@(Alignment at' mod stride)) = do
               return ()
 
 elaborate _ Nothing = return Nothing
-elaborate ins@(pos :< CompInst cd cn _ _) (Just i) = do
+elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
     s <- lift get
     if isJust $ i ^? ix cn
         then do
@@ -215,7 +218,7 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
   where t1 = buildPropLens e (map peName path)
         t2 = buildPropLens e (map peName path)
 
-elaborate d@(_ :< CompDef _ n _) e = return e
+elaborate d@(_ :< CompDef _ _ n _) e = return e
 
 elaborate (pos :< PropDefault prop rhs) (Just e) = do
   legal <- checkDefaultAssign pos (Just (e ^. _Fix)) prop rhs
@@ -272,10 +275,10 @@ getDef syms scope def = head $ S.lkup syms scope def ^.. _Just
 elab (ti, syms) = do
   map f ti
     where
-        env = ReaderEnv [""] syms
+        env = ReaderEnv {_scope = [""], _syms = syms, _rext = Nothing}
         st  = ElabState {_msgs = emptyMsgs, _addr = 0, _regwidth = 4, _nextbit = 0, _usedbits = Set.empty, _baseAddr = 0, _sprops = [defDefs]}
         emptyMsgs = Msgs [] [] []
-        f x = runState (runReaderT (instantiate (pos :< CompInst x x Nothing (Alignment Nothing Nothing Nothing))) env) st
+        f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
             where pos = extract $ getDef syms [""] x ^. _2
 
 ereturn = return . Just . Fix
