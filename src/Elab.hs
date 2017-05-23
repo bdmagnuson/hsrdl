@@ -284,10 +284,6 @@ elab (ti, syms) = do
 ereturn = return . Just . Fix
 assignProp k v = M.insert k (Just v)
 
---a =  elab ret
---f ((Just s,_):_) = s
---out = f a
---
 fromRight (Right a)  = a
 fromRight (Left _) = error "fromRight: is Left"
 

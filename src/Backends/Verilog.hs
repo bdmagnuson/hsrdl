@@ -31,15 +31,12 @@ $(makePrisms ''PropRHS)
 $(makeLenses ''ElabF)
 
 instance Monoid P.Doc where
-    mempty = P.empty
-    mappend = (<>)
+  mempty = P.empty
+  mappend = (<>)
 
 instance Stringable P.Doc where
-    stFromString = P.text
-    stToString = flip P.displayS "" . P.renderCompact
-    --mconcatMap m k = PP.fcat . map k $ m
-    --mintercalate = (PP.fcat .) . PP.punctuate
-    --mlabel x y = x PP.$$ PP.nest 1 y
+  stFromString = P.text
+  stToString = flip P.displayS "" . P.renderCompact
 
 data FieldInfo = FieldInfo {
     _fname  :: String,
@@ -58,28 +55,33 @@ data RegInfo = RegInfo {
 
 makeLenses ''RegInfo
 
-
-filterExt :: Fix ElabF -> [(Integer, Integer)]
-filterExt  x = cata f x
-  where f a@(ElabF Field n p e i l m) = []
-        f a@(ElabF Array n p e i l m) = concat i
-        f a@(ElabF t n p e i l m) =
-          case fromJust $ ((trace (show n) p) ^? ix "sharedextbus" . _Just . _PropBool) of
-            True  -> case (minimumOf (traverse . _1) childRanges,
-                           maximumOf (traverse . _2) childRanges) of
-              (Nothing, _) -> []
-              (_, Nothing) -> []
-              (Just a, Just b) -> [(a, b)]
-            False -> case (t, e) of
-                       (Reg, False) -> []
-                       (Reg, True) -> [(l, l)]
-                       otherwise -> concat i
-          where
-            childRanges = concat i
-            l = fromJust $ p ^? ix "address" . _Just . _PropNum
-            getAddress x  = fromJust (getNumProp x "address")
-
 data RegsFilter = FilterInternal | FilterExternal | FilterNone
+
+filterExt :: Fix ElabF -> [(String, Integer, Integer)]
+filterExt x = cata f x
+  where f a@(ElabF t n p e i l m) =
+          case t of
+            Field -> []
+            Array -> childRanges
+            otherwise ->
+              case fromJust $ p ^? ix "sharedextbus" . _Just . _PropBool of
+                True  -> case (minimumOf (traverse . _2) childRanges,
+                               maximumOf (traverse . _3) childRanges) of
+                  (Nothing, _) -> []
+                  (_, Nothing) -> []
+                  (Just a, Just b) -> [(n, a, b)]
+                False -> case (t, e) of
+                           (Reg, False) -> []
+                           (Reg, True) -> [(n, l, l)]
+                           otherwise -> childRanges
+            where
+              childRanges = map (over _1 (combine t n)) (concat i)
+              l = fromJust $ p ^? ix "address" . _Just . _PropNum
+              getAddress x  = fromJust (getNumProp x "address")
+              combine Addrmap n = id
+              combine Array n = (n ++)
+              combine _ n = ((n ++ "_") ++)
+
 
 getRegs' :: RegsFilter -> Fix ElabF -> [RegInfo]
 getRegs' fe (Fix (ElabF t n p ext i l m)) =
@@ -89,7 +91,7 @@ getRegs' fe (Fix (ElabF t n p ext i l m)) =
       FilterInternal -> if ext then [] else r
       FilterExternal -> if ext then r else []
     Addrmap   -> concatMap (getRegs' fe)  i
-    Array     -> map (\x -> x & rname %~ \x -> n ++ x)         (concatMap (getRegs' fe) i)
+    Array     -> map (\x -> x & rname %~ \x -> n ++ x) (concatMap (getRegs' fe) i)
     _ -> map (\x -> x & rname %~ \x -> n ++ "_" ++ x)  (concatMap (getRegs' fe) i)
     where 
       r = [RegInfo {_rname = n, _rprops = p, _rfields = concatMap getFields i}]
@@ -117,8 +119,8 @@ block d1 d2 i b  = P.vcat [d1, P.indent i b, d2]
 alwaysComb    = block (P.text "always_comb begin") (P.text "end") 3
 caseBlock v i = block (P.text "case (" <> v <> P.text ")") (P.text "endcase") 3 (P.vcat i)
 
-ifBlock  c = block (P.text "if (" <> c <> P.text ") begin") (P.text "end") 3
-ifElseBlock c p n = ifBlock c p <> block (P.text "else begin") (P.text "end") 3 n
+ifBlock  c b = block (P.text "if (" <> c <> P.text ") begin") (P.text "end") 3 (P.vcat b)
+ifElseBlock c p n = ifBlock c p <> block (P.text "else begin") (P.text "end") 3 (P.vcat n)
 
 alwaysCR cn rn r a = block open close 3 body
   where open  = P.text "always @(posedge" <+> P.text cn <+> P.text "or negedge" <+> P.text rn <> P.text ") begin"
@@ -291,10 +293,23 @@ fieldInst f = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplat
 
 fff x = show (filterExt x)
 
-verilog' x = P.vcat $ intersperse P.empty [mheader]--, wires, insts, readMux r, P.text "endmodule", P.empty]
+extSig (n, l, h) =
+  [ Output (n ++ "_wr") 1
+  , Output (n ++ "_rd") 1
+  , Output (n ++ "_wdata") 32 --regwidth
+  , Input  (n ++ "_rdata") 32 --regwidth
+  , Input  (n ++ "_ack") 1
+  , Wire ("_" ++ n ++ "_swacc") 1
+  ] ++ (if l == h then [] else [Output (n ++ "_addr") (clog2 (h - l))])
+
+--verilog' x = P.vcat $ intersperse P.empty [mheader, wires]--, insts, readMux r, P.text "endmodule", P.empty]
+verilog' x = P.vcat $ intersperse P.empty [mheader, wires, readMux r e, insts, syncBlock e, P.text "endmodule", P.empty]
   where r = getRegs FilterInternal x
+        e = filterExt x
         f = concatMap (^. rfields) r
-        (sigs, fields) = unzip (map fieldInst f) & _1 %~ concat
+        (intSigs, fields) = unzip (map fieldInst f) & _1 %~ concat
+        sigs = intSigs ++ extSigs
+        extSigs = concatMap extSig e
         insts = P.vcat $ map render fields
         mheader = header' (x ^. _Fix . name) sigs
         wires = P.vcat $ map ff (filter isWire sigs)
@@ -307,11 +322,33 @@ header' n sigs = block d1 (P.text ");") 3 (P.vcat $ map1 f1 f2 (filter (\x -> is
           f2 (Input  a w) = P.text "input"  <+> arrayWi w <+> P.text a
           f2 (Output a w) = P.text "output" <+> arrayWi w <+> P.text a
 
-readMux r = alwaysComb $ P.vcat $ intersperse P.empty [swaccDefault, swaccAssign, readAssign]
+readMux r e = alwaysComb $ P.vcat $ intersperse P.empty [swaccDefault, swaccAssign, intReadAssign, extReadAssign]
   where
-    swaccDefault  = P.vcat $ map (\r -> swaccName r <+> P.text "= 1'b0;") r
-    swaccAssign   = ifBlock (P.text "rd || wr") (caseBlock (P.text "addr") $ map (\r -> caseItem (getAddress r) [swaccName r <> P.text " = 1'b1;"]) r)
-    swaccName x   = P.char '_' <> P.text (x ^. rname) <> P.text "_swacc"
+    swaccDefault  = P.vcat $ concat [[P.text "_v_ack = 1'b0;"], intDefault, extDefault]
+    intDefault    = map (\r ->       swacc (r ^. rname) <+> P.text "= 1'b0;") r
+    extDefault    = map (\(n,_,_) -> swacc n <+> P.text "= 1'b0;") e
+    swaccAssign   = ifBlock (P.text "rd || wr") [P.text "_v_ack = 1'b1;", intCase, extCase]
+    intCase       = caseBlock (P.text "addr") $ map (\r -> caseItem (P.text "addr ==" <+> getAddress r) [swacc (r ^. rname) <> P.text " = 1'b1;"]) r
+    extCase       = caseBlock (P.text "1'b1") $ map (\(m, h, l) -> caseItem (P.text "addr >=" <+> P.integer h <+> P.text "|| addr <=" <+> P.integer l)
+                                                                            [P.char '_' <> P.text m <> P.text "_swacc = 1'b1;", P.text "_v_ack = 1'b0;"]) e
+
     getAddress x  = P.integer $ fromJust (getNumProp x "address")
-    readAssign    = P.text "rdata = 0;" P.<$$> caseBlock (P.text "1'b1") (map (\r -> caseItem (swaccName r) (map swaccFields (r ^. rfields))) r)
-    swaccFields f = P.text "rdata" <> arrayLR' f <+> P.equals <+> P.text (f ^. fname) <> P.semi
+    intReadAssign    = P.text "_v_rdata = '0;" P.<$$> caseBlock (P.text "1'b1") (map (\r -> caseItem (swacc (r ^. rname)) (map swaccFields (r ^. rfields))) r)
+    extReadAssign    = P.vcat $ map (\(x,_,_) -> ifBlock (rd x) [P.text "_v_ack = 1'b1;", (P.text "_v_rdata =" <+> (suffix x "rdata") <> P.semi)]) e
+    swaccFields f = P.text "_v_rdata" <> arrayLR' f <+> P.equals <+> P.text (f ^. fname) <> P.semi
+    rd        x   = suffix x "rd"
+
+swacc     x   = suffix x "swacc"
+suffix x s    = P.char '_' <> P.text x <> P.char '_' <> P.text s
+
+syncBlock e = alwaysCR "clk" "rst_l" rb cb
+  where rb = [P.text "ack <= 1'b0;", P.text "rdata <= '0;"] ++ (map (\(Output n _) -> P.text n <+> P.text "<= '0;") outputs)
+        cb = [P.text "ack <= _v_ack;", P.text "rdata <= _v_rdata;"] ++ concatMap f e
+        f (n, l, h) = map ($ n)
+          [ \x -> P.text n <> P.text "_rd   <= rd &&" <+> swacc n <> P.semi
+          , \x -> P.text n <> P.text "_wr   <= wr &&" <+> swacc n <> P.semi
+          , \x -> P.text n <> P.text "_addr <= addr -" <+> P.integer l <> P.semi
+          ]
+        outputs = filter isOutput (concatMap extSig e)
+
+
