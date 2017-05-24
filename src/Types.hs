@@ -39,7 +39,7 @@ data PathElem = PathElem {
 
 data ExprF a =
      CompDef   {
-        ext   :: Maybe Bool,
+        ext    :: Maybe Bool,
         ctype  :: CompType,
         name   :: String,
         expr   :: [a]

@@ -2,9 +2,7 @@
 {-# LANGUAGE RankNTypes #-}
 
 module Parser (
-       rws
-     , SourcePos
-     , parseFile
+       parseFile
      ) where
 
 import GHC.IO
@@ -290,14 +288,3 @@ parseFile file = do
       return Nothing
     Right (t, s) -> return $ Just (topInst s, syms s)
 
---a = hsrdlParseFile "test/srdl/user_prop.srdl" 
---b = unsafePerformIO a
---f (Right a) = a
---(t, s) = f b
---
---ret = (topInst s, syms s)
-
-
-
---parseString p s = parse p "file" s
---hsrdlParseString s = parse parseSrdl "file" s

@@ -5,32 +5,33 @@ property userprop {
 
 
 addrmap test {
-   reg regff {
-      //desc = "ff";
 
-      field test {
-         default intr;
-      } f1;
-   } hiya;
-
+   reg { field {} a;} gg;
 
    reg {
+      default intr;
+      regwidth = 32;
       default hw = "rw";
-      field {} a[2];
-      field {reset = 4;} b[2];
+      field {intr;} a[2];
+      field {reset = 4;} bb[2];
       field {} c[7:6];
-   } b[2] @50;
+   } bbb[4] @64;
 
-   regfile {
-      reg {field {} a;} b @0;
-   } rf;
-
-   reg { field {hw="rw";} a[3];} c %= 200;
-   reg { field {} a[4];} d[4] += 100 %= 500;
 
    reg {
       field {} f1;
    } reg2[4];
+
+   regfile {
+      external regfile {
+         sharedextbus;
+         reg {field {} a;} c1;
+         reg {field {} a;} c2;
+         reg {field {} a;} c3;
+         reg {field {} a;} c4;
+         reg {field {} a;} c5;
+      } layer[2];
+   } rf;
 
 };
 

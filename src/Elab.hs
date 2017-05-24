@@ -50,9 +50,7 @@ data Msgs = Msgs {
     _err   :: [String]
 } deriving (Show)
 
-
 $(makeLenses ''Msgs)
-
 
 data ElabState = ElabState {
     _msgs     :: Msgs,
@@ -66,8 +64,6 @@ data ElabState = ElabState {
 $(makeLenses ''ElabState)
 
 type ElabS = State ElabState
-type Elab = Fix ElabF
-
 
 data ReaderEnv = ReaderEnv {
     _rext   :: Maybe Bool,
@@ -77,11 +73,8 @@ data ReaderEnv = ReaderEnv {
 
 makeLenses ''ReaderEnv
 
-
-
 logMsg t pos m = lift $ (msgs . t) %= ((sourcePosPretty pos ++ " - " ++ m):)
-getMsgs x = (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
-
+getMsgs x = reverse $ (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
 
 assignBits :: SourcePos -> Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 assignBits pos _ Nothing = return Nothing
@@ -116,17 +109,9 @@ roundMod x m =
     (c, _) -> (c + 1) * m
 
 
-pushDefs = do
-  lift (sprops %= \a@(x:xs) -> x:a)
-  return ()
-
-popDefs = do
-  lift (sprops %= \(x:xs) -> xs)
-  return ()
-
-modifyDefs prop rhs = do
-    mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= Just rhs)) [Signal, Field, Reg, Regfile, Addrmap]
-    return ()
+pushDefs = lift (sprops %= \a@(x:xs) -> x:a)
+popDefs  = lift (sprops %= \(x:xs) -> xs)
+modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= Just rhs)) [Signal, Field, Reg, Regfile, Addrmap]
 
 instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
@@ -145,7 +130,7 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
                                            Nothing -> return Nothing
                                            Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0
                                          where arrAlign b x = Alignment ((\y -> b + x * y) <$> stride) Nothing Nothing
-            (Reg, Nothing) -> (foo newinst >>= assignAddress >>= incrAddress) <* resetBits
+            (Reg, Nothing) -> (foo newinst >>= assignAddress) <* resetBits
             otherwise -> setBaseAddress *> foo newinst
          where
            isext = msum [env ^. rext, Types.ext def, iext]
@@ -172,10 +157,8 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
            assignAddress e = do
              let rw = fromJust (e ^? _Just . _Fix . props . ix "regwidth" . _Just . _PropNum) `div` 8
              a <- elmAddr rw
+             lift (addr .= a + rw)
              return $ e & _Just . _Fix . props %~ assignProp "address" (PropNum a)
-           incrAddress e = do
-             lift (addr += fromJust (e ^? _Just . _Fix . props . ix "regwidth" . _Just . _PropNum) `div` 8)
-             return e
            setBaseAddress = do
              b <- lift (use addr)
              lift (baseAddr .= b)
@@ -197,7 +180,7 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
             Just a -> (return . Just) (i & _Fix . inst %~ (++ [a]))
 
 
--- For reasons that aren't clear I can't use t1 where t2 is being used
+-- For reasons that aren't clear (setter vs getter?) I can't use t1 where t2 is being used
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
   case t1 of
     Left elm -> do
@@ -251,8 +234,6 @@ cType pos prop rhs (Just x) =
     True -> return (Just ())
 cType _ _ _ Nothing = return Nothing
 
-
-
 buildPropLens e xs =
   case foldl f (Right id) xs of
     Left y -> Left y
@@ -268,8 +249,7 @@ elab (ti, syms) =
   map f ti
     where
         env = ReaderEnv {_scope = [""], _syms = syms, _rext = Nothing}
-        st  = ElabState {_msgs = emptyMsgs, _addr = 0, _nextbit = 0, _usedbits = Set.empty, _baseAddr = 0, _sprops = [defDefs]}
-        emptyMsgs = Msgs [] [] []
+        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = Set.empty, _baseAddr = 0, _sprops = [defDefs]}
         f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
             where pos = extract $ getDef syms [""] x ^. _2
 

@@ -111,7 +111,6 @@ map1 f1 f2 []  = []
 map1 f1 f2 [x] = [f2 x]
 map1 f1 f2 (x:xs) = f1 x : map1 f1 f2 xs
 
-
 block d1 d2 i b  = P.vcat [d1, P.indent i b, d2]
 
 alwaysComb    = block (P.text "always_comb begin") (P.text "end") 3
@@ -128,7 +127,6 @@ alwaysCR cn rn r a = block open close 3 body
 caseItem :: Doc -> [Doc] -> Doc
 caseItem i [x] = i <+> P.colon <+> x
 caseItem i  x  = block (i <+> P.colon <+> P.text "begin") (P.text "end") 3 (P.vcat x)
-
 
 arrayWi 1 = P.empty
 arrayWi w = P.brackets (P.integer (w - 1) <> P.colon <> P.integer 0)
@@ -152,6 +150,7 @@ getNumProp   e p = getProp  e p _PropNum
 
 getfNumProp  e p = getfProp e p _PropNum
 getfBoolProp e p = getfProp e p _PropBool
+getfIntrProp e = getfProp e "intr" _PropIntr
 
 getfEnumProp e p | Just (v) <- getfProp e p _PropEnum = Just v
 getfEnumProp e p | Nothing  <- getfProp e p _PropEnum = error p
@@ -170,6 +169,8 @@ fieldInstTemplate = newSTMP $ unlines [
   ") (",
   "   .clk(clk),",
   "   .rst_l(rst_l),",
+  "   .intr($intr$),",
+  "   .intr_reg($intr_reg$),",
   "   .sw_wdata(wdata),",
   "   .hw_wdata($hw_wdata$),",
   "   .hw_we($hw_we$),",
@@ -203,7 +204,7 @@ data Sigs =
   | Lit    String
   | Input  String Integer
   | Output String Integer
-  | Wire   String Integer
+  | Wire   String Integer deriving (Ord, Eq)
 
 isInput (Input _ _)   = True
 isInput _             = False
@@ -233,9 +234,15 @@ getfprop e p =
     Just (PropEnum e)     -> Just (Lit e)
 
 
-fieldInst :: FieldInfo -> ([Sigs], StringTemplate Doc)
-fieldInst f = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplate)
-  where io = ordIO ++ incrIO ++ decrIO
+filterDups x = M.keys (filterDups' M.empty x)
+  where
+    filterDups' m [] = m
+    filterDups' m (x:xs) = if M.member x m then filterDups' m xs else filterDups' (M.insert x True m) xs
+
+
+fieldInst :: (RegInfo, FieldInfo) -> ([Sigs], StringTemplate Doc)
+fieldInst (r, f) = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplate)
+  where io = ordIO ++ incrIO ++ decrIO ++ intrIO
         n  = f ^. fname
         fw = (f ^. fmsb) - (f ^. flsb) + 1
         getBool x  = fromJust $ getfBoolProp f x
@@ -248,7 +255,7 @@ fieldInst f = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplat
         one  w = Lit $ show w ++ "'b1"
         fn  (p, v) = setAttribute p (sig2wire v)
         fnp (p, v) = setAttribute p v
-        sigs = filter (\x -> isInput x || isOutput x || isWire x) (map snd io)
+        sigs = filterDups $ filter (\x -> isInput x || isOutput x || isWire x) (map snd io)
         hw_wr = (getEnum "hw" == "rw") || (getEnum "hw" == "wr") || (getEnum "hw" == "w")
         hw_we = getBool "we"
         params =
@@ -269,6 +276,9 @@ fieldInst f = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplat
                             ( True,  True) -> Input (n ++ "_we") 1)
           , ("acc"      , Wire ("_" ++ n ++ "_swacc") 1)
           ]
+        intrIO = if isJust (getfIntrProp f)
+                 then [("intr", Wire (n ++ "_intr") 1), ("intr_reg", Wire ((r ^. rname) ++ "_intr_reg") 1)]
+                 else [("intr_reg", zero 1)]
         c = fromJust $ getfBoolProp f "counter"
         decrIO :: [(String, Sigs)]
         decrIO = map (ife c) [ ("decr"              , zero 1   , fromMaybe (Input (n ++ "_decr") 1) (getfprop f "decr"))
@@ -300,10 +310,10 @@ extSig (n, l, h) =
   , Wire ("_" ++ n ++ "_swacc") 1
   ] ++ (if l == h then [] else [Output (n ++ "_addr") (clog2 (h - l))])
 
-verilog' x = P.vcat $ intersperse P.empty [mheader, wires, insts, readMux r e, syncBlock e, P.text "endmodule", P.empty]
+verilog' x = P.vcat $ intersperse P.empty [mheader, wires, intrSummary r, insts, readMux r e, syncBlock e, P.text "endmodule", P.empty]
   where r = getRegs FilterInternal x
         e = filterExt x
-        f = concatMap (^. rfields) r
+        f = concatMap (\x -> zip (repeat x) (x ^. rfields)) r
         (intSigs, fields) = unzip (map fieldInst f) & _1 %~ concat
         sigs = intSigs ++ extSigs
         extSigs = concatMap extSig e
@@ -311,6 +321,15 @@ verilog' x = P.vcat $ intersperse P.empty [mheader, wires, insts, readMux r e, s
         mheader = header' (x ^. _Fix . name) sigs
         wires = P.vcat $ map ff (filter isWire sigs)
         ff (Wire a w) = P.text "wire" <+> arrayWi w <+> P.text a <> P.semi
+
+intrSummary r = P.vcat $ map f r
+  where f x = if null intrFields
+                then P.empty
+                else
+                  printSummary (x ^. rname) (intrFields ^.. traverse . fname)
+              where
+                intrFields = filter (\x -> isJust (getfIntrProp x)) (x ^. rfields)
+                printSummary r fs = P.text "wire" <+> P.text r <> P.text "_reg_intr = " <> P.hcat (intersperse (P.text " || ") [P.text x <> P.text "_intr" | x <- fs]) <> P.semi
 
 
 header' n sigs = block d1 (P.text ");") 3 (P.vcat $ map1 f1 f2 (filter (\x -> isInput x || isOutput x) sigs))
