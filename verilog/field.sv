@@ -1,6 +1,8 @@
 module srdlField #(
    parameter RESET        = 0,
    parameter WIDTH        = 1,
+   parameter WOCLR        = 0,
+   parameter WOSET        = 0,
    parameter RCLR         = 0,
    parameter RSET         = 0,
    parameter SW           = "rw",
@@ -9,51 +11,57 @@ module srdlField #(
    parameter INCRWIDTH    = 1,
    parameter DECRWIDTH    = 1,
    parameter NEXT         = 0,
-   parameter INTR         = "NONE"
+   parameter INTR         = "NONE",
+   parameter STICKY       = 1,
+   parameter STICKYBIT    = 0,
+   parameter WE           = 0,
+   parameter WEL          = 0,
+   parameter SINGLEPULSE  = 0
 ) (
-   input wire               clk,
-   input wire               rst_l,
+   input wire                 clk,
+   input wire                 rst_l,
 
-   input wire [WIDTH - 1:0] next_in,
-   input wire [WIDTH - 1:0] sw_wdata,
-   input wire [WIDTH - 1:0] hw_wdata,
-   input wire               hw_we,
-   input wire               rd,
-   input wire               wr,
-   input wire               acc,
-   input wire               hwset,
-   input wire               hwclr,
+   input wire     [WIDTH-1:0] next_in,
+   input wire     [WIDTH-1:0] sw_wdata,
+   input wire     [WIDTH-1:0] hw_wdata,
+   input wire                 hw_we,
+   input wire                 rd,
+   input wire                 wr,
+   input wire                 acc,
+   input wire                 hwset,
+   input wire                 hwclr,
 
-   output reg               intr,
-   input wire               reg_intr,
+   output reg                 intr,
+   input wire                 reg_intr,
 
    //Counter props
-   input wire               incr,
-   input wire               decr,
-   input wire [INCRWIDTH - 1:0] incrvalue,
-   input wire [DECRWIDTH - 1:0] decrvalue,
-   output reg              overflow,
-   output reg              underflow,
+   input wire                 incr,
+   input wire                 decr,
+   input wire [INCRWIDTH-1:0] incrvalue,
+   input wire [DECRWIDTH-1:0] decrvalue,
+   output reg                 overflow,
+   output reg                 underflow,
 
-   input wire   [WIDTH-1:0] incrsaturate_lhs,
-   input wire   [WIDTH-1:0] incrthreshold_lhs,
-   input wire   [WIDTH-1:0] decrsaturate_lhs,
-   input wire   [WIDTH-1:0] decrthreshold_lhs,
+   input wire     [WIDTH-1:0] incrsaturate_lhs,
+   input wire     [WIDTH-1:0] decrsaturate_lhs,
+   input wire     [WIDTH-1:0] incrthreshold_lhs,
+   input wire     [WIDTH-1:0] decrthreshold_lhs,
 
-   output reg   [WIDTH-1:0] rhscrsaturate_rhs,
-   output reg   [WIDTH-1:0] rhscrthreshold_rhs,
-   output reg   [WIDTH-1:0] decrsaturate_rhs,
-   output reg   [WIDTH-1:0] decrthreshold_rhs,
+   output reg     [WIDTH-1:0] incrsaturate_rhs,
+   output reg     [WIDTH-1:0] decrsaturate_rhs,
+   output reg     [WIDTH-1:0] incrthreshold_rhs,
+   output reg     [WIDTH-1:0] decrthreshold_rhs,
 
-   output reg [WIDTH - 1:0] q,
+   output reg     [WIDTH-1:0] q
 );
 
 reg [WIDTH - 1:0] next;
 reg [WIDTH - 1:0] sticky_mask, r_sticky_mask;
 reg [WIDTH - 1:0] hw_wdata_mask;
 reg               r_intr;
+reg               wrap;
 
-always @(posedge clk)
+always @(posedge clk) begin
    if (!rst_l) begin
       q <= RESET;
       r_sticky_mask <= '0;
@@ -61,7 +69,7 @@ always @(posedge clk)
    end else begin
       q <= next;
       r_sticky_mask <= sticky_mask;
-      if (!NONSTICKY)
+      if (STICKY)
          r_intr <= intr;
    end
 end
@@ -89,13 +97,13 @@ always_comb begin
 
    if (wr && (SW == "rw" || SW == "wr" || SW == "W")) begin
       if (WOSET) begin
-         next = next |  wdata;
-      end else if (WOCLR)
-         next = next & ~wdata;
+         next = next | sw_wdata;
+      end else if (WOCLR) begin
+         next = next & ~sw_wdata;
          intr = intr & (next != 0);
-         sticky_mask = sticky_mask & ~wdata;
-      else begin
-         next = wdata;
+         sticky_mask = sticky_mask & ~sw_wdata;
+      end else begin
+         next = sw_wdata;
          intr = 0;
          sticky_mask = '0;
       end
@@ -113,10 +121,10 @@ always_comb begin
          next = hw_wdata_mask;
    end
 
-   underflow = 0
+   underflow = 0;
    overflow = 0;
    if (COUNTER) begin
-      case (decr, incr)
+      case ({decr, incr})
          2'b01 : begin
             {wrap, next} = next + incrvalue;
             if (wrap || next > incrsaturate_lhs)
@@ -129,7 +137,7 @@ always_comb begin
                next = decrsaturate_lhs;
             underflow = wrap;
          end
-         2'b11 : {wrap, next} = next + incrvalue - decrvalue;
+         2'b11 : begin
             {wrap, next} = next + incrvalue - decrvalue;
             if (wrap) begin
                underflow = decrvalue > incrvalue;
@@ -158,11 +166,13 @@ always_comb begin
 
    case (INTR)
       "LEVEL"    : intr = |next;
-      "POSEDGE"  : intr = |next && ~|d
-      "NEGEDGE"  : intr = ~|next && |d;
-      "BOTHEDGE" : intr = next != d;
+      "POSEDGE"  : intr = |next && ~|q;
+      "NEGEDGE"  : intr = ~|next && |q;
+      "BOTHEDGE" : intr = next != q;
       "NONE"     : intr = 0;
       default    : intr = 0;
    endcase
 end
+
+endmodule
 
