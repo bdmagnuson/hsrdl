@@ -19,7 +19,6 @@ main = do
       case head $ elab (fromJust res) of
         (Nothing, st) -> mapM_  putStrLn (getMsgs st)
         (Just t, st) -> do
-          putStrLn $ fff t
           P.putDoc $ verilog' t
           mapM_  putStrLn (getMsgs st)
       return ()

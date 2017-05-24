@@ -52,6 +52,10 @@ module srdlField #(
    output reg     [WIDTH-1:0] incrthreshold_rhs,
    output reg     [WIDTH-1:0] decrthreshold_rhs,
 
+   output reg                 anded,
+   output reg                 ored,
+   output reg                 xored,
+
    output reg     [WIDTH-1:0] q
 );
 
@@ -79,6 +83,10 @@ always_comb begin
    decrthreshold_rhs = q == decrthreshold_lhs;
    incrsaturate_rhs  = q == incrsaturate_lhs;
    decrsaturate_rhs  = q == decrsaturate_lhs;
+
+   ored = |q;
+   anded = &q;
+   xored = ^q;
 end
 
 always_comb begin

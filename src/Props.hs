@@ -8,27 +8,29 @@ module Props (
      , typeOf
      , isEnum
      , getEnumValues
+     , isPropSet
+     , exMap
      ) where
 
 import qualified Data.Map.Strict as M
 import Control.Lens
+import Data.List (delete)
 
 import Types
 
 typeOf :: PropRHS -> PropType
-typeOf (PropNum  _)  = PropNumT
-typeOf (PropLit  _)  = PropLitT
-typeOf (PropBool _)  = PropBoolT
-typeOf (PropRef _ _) = PropRefT
-typeOf (PropIntr _ _) = PropIntrT
-typeOf (PropEnum _) = PropEnumT
+typeOf (PropNum  _)    = PropNumT
+typeOf (PropLit  _)    = PropLitT
+typeOf (PropBool _)    = PropBoolT
+typeOf (PropRef _ _)   = PropRefT
+typeOf (PropIntr _ _)  = PropIntrT
+typeOf (PropEnum _)    = PropEnumT
 
 checktype :: PropType -> PropRHS -> Bool
 checktype x y = x == typeOf y
 
 accessType = EnumDef (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na", 4)])
 
---intrType = EnumDef "intr_type" (M.fromList [("level", 0), ("nonsticky", 1), ("posedge", 2), ("negedge", 3), ("bothedge", 4)])
 
 defFalse     = Property PropBoolT (Just (PropBool False))
 defNum n     = Property PropNumT (Just (PropNum n))
@@ -58,13 +60,17 @@ p_swacc         = ("swacc",         defFalse)
 p_swmod         = ("swmod",         defFalse)
 p_sharedextbus  = ("sharedextbus",  defFalse)
 p_singlepulse   = ("singlepulse",   defFalse)
-p_incrvalue     = ("incrvalue",     defNum 1)
-p_decrvalue     = ("decrvalue",     defNum 1)
+p_incrvalue     = ("incrvalue",     defNothing PropNumT)
+p_decrvalue     = ("decrvalue",     defNothing PropNumT)
 p_regwidth      = ("regwidth",      defNum 32)
 p_incrsaturate  = ("incrsaturate",  defNothing PropNumT)
 p_decrsaturate  = ("decrsaturate",  defNothing PropNumT)
 p_incrthreshold = ("incrthreshold", defNothing PropNumT)
 p_decrthreshold = ("decrthreshold", defNothing PropNumT)
+
+isPropSet Nothing                 = False
+isPropSet (Just (PropBool False)) = False
+isPropSet (Just _)                = True
 
 getPropType :: String -> Maybe PropType
 getPropType p = do
@@ -121,4 +127,21 @@ defDefs = M.fromList [
 
 
 
-
+exMap = foldl M.union M.empty (map f exSets)
+  where f x = foldl (.) id [M.insert k (delete k x) | k <- x] M.empty
+        exSets =
+          [ ["activehigh", "activelow"]
+          , ["woclr", "woset"]
+          , ["we", "wel"]
+          , ["hwenable", "hwmask"]
+          , ["counter", "intr"]
+          , ["incrvalue", "incrwidth"]
+          , ["decrvalue", "decrwidth"]
+          , ["nonsticky", "sticky", "stickybit"]
+          , ["enable", "mask"]
+          , ["haltenable", "haltmask"]
+          , ["bigendian", "littleendian"]
+          , ["lsb0", "msb0"]
+          , ["async", "sync"]
+          , ["dontcompare", "dontest"]
+          , ["level", "negedge", "posedge", "bothedge"]]

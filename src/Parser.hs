@@ -56,7 +56,11 @@ lexeme = L.lexeme sc
 
 identifier = lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
 
-parseIdentifier = identifier
+parseIdentifier' = identifier
+parseIdentifier  = do
+  id <- identifier
+  when (id `elem` rws) (fail ("Can't use reserved word '" ++ id ++ "' as identifier"))
+  return id
 
 symbol = L.symbol sc
 
@@ -193,7 +197,7 @@ parseIntr = do
 parsePropAssign' = do
    pos  <- getPosition
    d    <- optional (join parseRsvdRet "default")
-   prop <- parseIdentifier
+   prop <- parseIdentifier'
    rhs  <- option (PropBool True) (equal *> (parseRHS prop))
    semi
    case d of
@@ -203,7 +207,7 @@ parsePropAssign' = do
 parsePostPropAssign = do
    pos <- getPosition
    path <- pathElem `sepBy` dot
-   prop <- dref *> parseIdentifier
+   prop <- dref *> parseIdentifier'
    equal
    rhs <- parseRHS prop
    semi

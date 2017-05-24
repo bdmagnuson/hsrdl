@@ -189,10 +189,16 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
     Right l -> do
       legal <- checkAssign pos (e ^? fromRight t2 . _Fix) prop rhs
       case legal of
-        Just () -> (return . Just) $ e & l . _Fix . props %~ assignProp prop rhs
+        Just () -> foldl (>>=) ((return . Just) $ e & l . _Fix . props %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
         Nothing -> return Nothing
   where t1 = buildPropLens e (map peName path)
         t2 = buildPropLens e (map peName path)
+        cExclusive p Nothing = return Nothing
+        cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . props . ix p)
+                         then do logMsg warn pos ("Property " ++ prop ++ " is mutually exlusive with " ++ p ++ ".  Unsetting " ++ p ++ ".")
+                                 return $ e & _Just . _Fix . props . ix p .~ Nothing
+                         else return e
+
 
 elaborate d@(_ :< CompDef _ _ n _) e = return e
 
@@ -204,7 +210,7 @@ elaborate (pos :< PropDefault prop rhs) (Just e) = do
       modifyDefs prop rhs
       (return . Just) e
 
-checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs >>= cExclusive
+checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
   where
     cExist = do
       sp <- lift (use sprops)
@@ -213,8 +219,6 @@ checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs >>= cExclusi
           logMsg err pos ("Property " ++ prop ++ " not defined for component " ++ show (elm ^. etype))
           return Nothing
         Just p -> return (Just p)
-    cExclusive (Just _) = return (Just ())
-    cExclusive Nothing = return Nothing
 
 checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= cType pos prop rhs
   where

@@ -1,4 +1,37 @@
-Interrupts
-   register interrupt summary
+Property reference RHS in Verilog backend
+Properties that support more than one type on RHS
+More property assignment validation
+   Post assigns to non dynamic properties
+Alignment - full align.  requires lookahead of size of whole element.... booooo
+Investigate custom combo blocks per field rather than generic srdlField
 
-Alignment - full align.  requires lookahead of size of array.... booooo
+Currently unsupported properties:
+   async
+   activelow
+   activehigh
+   cpuif_reset
+   encode
+   errextbus
+   hwenable
+   hwmask
+   dontcompare
+   donttest
+   field_reset
+   fieldwidth
+   precedence
+   resetsignal
+   signalwidth
+   swwe
+   swwel
+
+No plans to support:
+   bigendian
+   littleendian
+   bridge
+   shared
+   rsvdset
+   rsvdsetX
+   lsb0
+   msb0
+
+
