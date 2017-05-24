@@ -244,7 +244,7 @@ parsePropDef = do
 
 parseNumeric = lexeme L.decimal
 
-parseRHS prop = if isEnum prop then parseEnum else parseLit <|> parseNum <|> try parseBool
+parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit
    where parseLit = do
             a <- between dquote dquote (many (noneOf "\""))
             return $ PropLit a
@@ -255,7 +255,7 @@ parseRHS prop = if isEnum prop then parseEnum else parseLit <|> parseNum <|> try
             a <- rword "true" *> return True <|> rword "false" *> return False
             return $ PropBool a
          parseEnum = do
-            a <- between dquote dquote (many (noneOf "\""))
+            a <- option "" (between dquote dquote (many (noneOf "\"")))
             case a `elem` (getEnumValues prop) of
               False -> fail $ "Legal values for " ++ prop ++ " are " ++ show (getEnumValues prop)
               True -> return (PropEnum a)

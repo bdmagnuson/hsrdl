@@ -10,16 +10,14 @@ module Backends.Verilog
   , fff
   ) where
 
-import Control.Monad (msum, join)
+import Control.Lens
 import Data.Functor.Foldable
 import Text.StringTemplate
-import Control.Lens
 import Text.Show.Deriving
 import qualified Data.Map.Strict as M
 
 import Text.PrettyPrint.Leijen (Doc, (<>), (<+>))
 import qualified Text.PrettyPrint.Leijen as P
-import Debug.Trace
 
 import Elab
 import Types (ElabF(..), CompType(..), PropRHS(..))
@@ -302,8 +300,7 @@ extSig (n, l, h) =
   , Wire ("_" ++ n ++ "_swacc") 1
   ] ++ (if l == h then [] else [Output (n ++ "_addr") (clog2 (h - l))])
 
---verilog' x = P.vcat $ intersperse P.empty [mheader, wires]--, insts, readMux r, P.text "endmodule", P.empty]
-verilog' x = P.vcat $ intersperse P.empty [mheader, wires, readMux r e, insts, syncBlock e, P.text "endmodule", P.empty]
+verilog' x = P.vcat $ intersperse P.empty [mheader, wires, insts, readMux r e, syncBlock e, P.text "endmodule", P.empty]
   where r = getRegs FilterInternal x
         e = filterExt x
         f = concatMap (^. rfields) r

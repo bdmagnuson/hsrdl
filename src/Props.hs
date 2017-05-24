@@ -31,8 +31,7 @@ accessType = EnumDef (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na
 --intrType = EnumDef "intr_type" (M.fromList [("level", 0), ("nonsticky", 1), ("posedge", 2), ("negedge", 3), ("bothedge", 4)])
 
 defFalse     = Property PropBoolT (Just (PropBool False))
-defZero      = Property PropNumT (Just (PropNum 0))
-defOne       = Property PropNumT (Just (PropNum 1))
+defNum n     = Property PropNumT (Just (PropNum n))
 defNothing a = Property a Nothing
 defEnum d    = Property PropEnumT (Just (PropEnum d))
 
@@ -47,7 +46,7 @@ p_hw            = ("hw",            defEnum "r")
 p_sw            = ("sw",            defEnum "rw")
 p_name          = ("name",          defNothing PropLitT)
 p_desc          = ("desc",          defNothing PropLitT)
-p_reset         = ("reset",         defZero)
+p_reset         = ("reset",         defNum 0)
 p_counter       = ("counter",       defFalse)
 p_rclr          = ("rclr",          defFalse)
 p_rset          = ("rset",          defFalse)
@@ -59,8 +58,9 @@ p_swacc         = ("swacc",         defFalse)
 p_swmod         = ("swmod",         defFalse)
 p_sharedextbus  = ("sharedextbus",  defFalse)
 p_singlepulse   = ("singlepulse",   defFalse)
-p_incrvalue     = ("incrvalue",     defOne)
-p_decrvalue     = ("decrvalue",     defOne)
+p_incrvalue     = ("incrvalue",     defNum 1)
+p_decrvalue     = ("decrvalue",     defNum 1)
+p_regwidth      = ("regwidth",      defNum 32)
 p_incrsaturate  = ("incrsaturate",  defNothing PropNumT)
 p_decrsaturate  = ("decrsaturate",  defNothing PropNumT)
 p_incrthreshold = ("incrthreshold", defNothing PropNumT)
@@ -106,6 +106,7 @@ defDefs = M.fromList [
                         , p_name
                         , p_intr
                         , p_sharedextbus
+                        , p_regwidth
                         ]),
 
    (Regfile, M.fromList [ p_desc

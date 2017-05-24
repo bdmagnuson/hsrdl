@@ -10,9 +10,6 @@ module Elab (
    , getMsgs
    ) where
 
-
---import GHC.IO
-
 import Control.Monad.Identity
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
@@ -21,22 +18,20 @@ import Control.Comonad.Cofree
 import Control.Comonad
 import Control.Lens hiding ((:<))
 import Debug.Trace
-
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
-
-
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
 
 import SymbolTable as S
 import Data.Functor.Foldable
-import Data.Maybe (isJust, fromMaybe)
+import Data.Maybe (isJust, fromMaybe, fromJust)
 import Props
 import Parser
 import Types
 
 import Text.Show.Deriving
 
+$(makePrisms ''PropRHS)
 $(makePrisms ''Fix)
 $(makeLenses ''ElabF)
 $(deriveShow1 ''ElabF)
@@ -62,7 +57,6 @@ $(makeLenses ''Msgs)
 data ElabState = ElabState {
     _msgs     :: Msgs,
     _addr     :: Integer,
-    _regwidth :: Integer,
     _usedbits :: Set.Set Integer,
     _nextbit  :: Integer,
     _baseAddr :: Integer,
@@ -131,7 +125,7 @@ popDefs = do
   return ()
 
 modifyDefs prop rhs = do
-    mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= (Just rhs))) [Signal, Field, Reg, Regfile, Addrmap]
+    mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= Just rhs)) [Signal, Field, Reg, Regfile, Addrmap]
     return ()
 
 instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
@@ -142,51 +136,50 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
         Nothing -> do
             logMsg err pos ("Lookup failure: " ++ show d ++ " in " ++ show (env ^. scope))
             return Nothing
-        Just (sc, _ :< def) -> do
+        Just (sc, _ :< def) ->
           case (ctype def, arr) of
             (Field, _)      -> foo newinst >>= assignBits pos arr
-            (_, Just (ArrWidth w)) -> do b <- elmAddr
-                                         x <- fmap (traverse id) $ mapM (\x -> instantiate (pos :< CompInst isext d (show x) Nothing (arrAlign b x))) [0..(w-1)]
+            (_, Just (ArrWidth w)) -> do b <- elmAddr 1
+                                         x <- traverse id <$> mapM (\x -> instantiate (pos :< CompInst isext d (show x) Nothing (arrAlign b x))) [0..(w-1)]
                                          case x of
                                            Nothing -> return Nothing
                                            Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0
                                          where arrAlign b x = Alignment ((\y -> b + x * y) <$> stride) Nothing Nothing
-            (Reg, Nothing) -> foo (newinst >>= assignAddress) <* incrAddress <* resetBits
-            otherwise -> setBaseAddress *> foo newinst <* incrAddress
+            (Reg, Nothing) -> (foo newinst >>= assignAddress >>= incrAddress) <* resetBits
+            otherwise -> setBaseAddress *> foo newinst
          where
            isext = msum [env ^. rext, Types.ext def, iext]
-           foo x   = do
-                       withReaderT newenv  $ pushDefs *> foldl (>>=) x (map elaborate (expr def)) <* popDefs
-                       where newenv = (scope .~ (sc ++ [d])) . (rext .~ isext)
+           foo x   = withReaderT newenv  $ pushDefs *> foldl (>>=) x (map elaborate (expr def)) <* popDefs
+                     where newenv = (scope .~ (sc ++ [d])) . (rext .~ isext)
            newinst =
              ereturn ElabF {
              _etype = ctype def,
              _name  = n,
-             _props =  M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList ((head sp) ^. at (ctype def) . _Just)),
+             _props =  M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList (head sp ^. at (ctype def) . _Just)),
              _inst  = [],
              _ext   = fromMaybe False isext,
              _lsb   = 0,
              _msb   = 0}
-           elmAddr = do
+           elmAddr rw = do
              curAddr <- lift (use addr)
              baseAddr <- lift (use baseAddr)
              let b = case (at', mod, stride) of
                       (Just a, _, _) -> baseAddr + a
-                      (Nothing, Just a, _) -> (roundMod curAddr a)
-                      (Nothing, Nothing,  _) -> curAddr
+                      (Nothing, Just a, _) -> roundMod curAddr a
+                      (Nothing, Nothing,  _) -> roundMod curAddr rw
              lift (addr .= b)
              return b
            assignAddress e = do
-             a <- elmAddr
+             let rw = fromJust (e ^? _Just . _Fix . props . ix "regwidth" . _Just . _PropNum) `div` 8
+             a <- elmAddr rw
              return $ e & _Just . _Fix . props %~ assignProp "address" (PropNum a)
-           incrAddress = do
-              gg <- lift (use regwidth)
-              lift (addr += gg)
-              return ()
+           incrAddress e = do
+             lift (addr += fromJust (e ^? _Just . _Fix . props . ix "regwidth" . _Just . _PropNum) `div` 8)
+             return e
            setBaseAddress = do
-              b <- lift (use addr)
-              lift (baseAddr .= b)
-              return ()
+             b <- lift (use addr)
+             lift (baseAddr .= b)
+             return ()
 
 elaborate _ Nothing = return Nothing
 elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
@@ -211,7 +204,7 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
       logMsg err pos ("invalid path, failed at \"" ++ show elm ++ "\"")
       return Nothing
     Right l -> do
-      legal <- checkAssign pos (e ^? (fromRight t2) . _Fix) prop rhs
+      legal <- checkAssign pos (e ^? fromRight t2 . _Fix) prop rhs
       case legal of
         Just () -> (return . Just) $ e & l . _Fix . props %~ assignProp prop rhs
         Nothing -> return Nothing
@@ -228,19 +221,19 @@ elaborate (pos :< PropDefault prop rhs) (Just e) = do
       modifyDefs prop rhs
       (return . Just) e
 
-checkAssign pos (Just elm) prop rhs = cExist >>= (cType pos prop rhs) >>= cExclusive
+checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs >>= cExclusive
   where
     cExist = do
       sp <- lift (use sprops)
       case sp ^? ix 0 . ix (elm ^. etype) . ix prop of
         Nothing -> do
-          logMsg err pos ("Property " ++ prop ++ " not defined for component " ++ (show (elm ^. etype)))
+          logMsg err pos ("Property " ++ prop ++ " not defined for component " ++ show (elm ^. etype))
           return Nothing
         Just p -> return (Just p)
     cExclusive (Just _) = return (Just ())
     cExclusive Nothing = return Nothing
 
-checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= (cType pos prop rhs)
+checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= cType pos prop rhs
   where
     cExistAny = do
       sp <- lift (use sprops)
@@ -248,10 +241,9 @@ checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= (cType pos prop rhs)
         Nothing -> do
           logMsg err pos ("Property " ++ prop ++ " not defined for any component")
           return Nothing
-        Just p -> do
-          return (Just p)
+        Just p -> return (Just p)
 
-cType pos prop rhs (Just x) = do
+cType pos prop rhs (Just x) =
   case checktype (x ^. ptype) rhs of
     False -> do
       logMsg err pos ("Type mismatch: Property '" ++ prop ++ "' expecting " ++ show (x ^. ptype) ++ " found " ++ show (typeOf rhs))
@@ -272,11 +264,11 @@ buildPropLens e xs =
 -- No monoid instance for AST so forced to use ^.. which returns a list
 getDef syms scope def = head $ S.lkup syms scope def ^.. _Just
 
-elab (ti, syms) = do
+elab (ti, syms) =
   map f ti
     where
         env = ReaderEnv {_scope = [""], _syms = syms, _rext = Nothing}
-        st  = ElabState {_msgs = emptyMsgs, _addr = 0, _regwidth = 4, _nextbit = 0, _usedbits = Set.empty, _baseAddr = 0, _sprops = [defDefs]}
+        st  = ElabState {_msgs = emptyMsgs, _addr = 0, _nextbit = 0, _usedbits = Set.empty, _baseAddr = 0, _sprops = [defDefs]}
         emptyMsgs = Msgs [] [] []
         f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
             where pos = extract $ getDef syms [""] x ^. _2
