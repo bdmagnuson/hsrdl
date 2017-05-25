@@ -137,14 +137,15 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
            foo x   = withReaderT newenv  $ pushDefs *> foldl (>>=) x (map elaborate (expr def)) <* popDefs
                      where newenv = (scope .~ (sc ++ [d])) . (rext .~ isext)
            newinst =
-             ereturn ElabF {
-             _etype = ctype def,
-             _name  = n,
-             _props =  M.fromList ((traverse . _2) %~ (^. pdefault) $ M.toList (head sp ^. at (ctype def) . _Just)),
-             _inst  = [],
-             _ext   = fromMaybe False isext,
-             _lsb   = 0,
-             _msb   = 0}
+             ereturn ElabF
+               { _etype = ctype def
+               , _name  = n
+               , _props = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
+               , _inst  = []
+               , _ext   = fromMaybe False isext
+               , _lsb   = 0
+               , _msb   = 0
+               }
            elmAddr rw = do
              curAddr <- lift (use addr)
              baseAddr <- lift (use baseAddr)
@@ -180,19 +181,19 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
             Just a -> (return . Just) (i & _Fix . inst %~ (++ [a]))
 
 
--- For reasons that aren't clear (setter vs getter?) I can't use t1 where t2 is being used
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
-  case t1 of
+  case t of
     Left elm -> do
-      logMsg err pos ("invalid path, failed at \"" ++ show elm ++ "\"")
+      logMsg err pos ("invalid path, failed at " ++ show elm)
       return Nothing
     Right l -> do
-      legal <- checkAssign pos (e ^? fromRight t2 . _Fix) prop rhs
+      legal <- checkAssign pos (e ^? runTraversal l . _Fix) prop rhs
       case legal of
-        Just () -> foldl (>>=) ((return . Just) $ e & l . _Fix . props %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
+        Just () -> foldl (>>=) ((return . Just) $ e & runTraversal l . _Fix . props %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
         Nothing -> return Nothing
-  where t1 = buildPropLens e (map peName path)
-        t2 = buildPropLens e (map peName path)
+  where t = buildPropTraversal e (concatMap buildPath path)
+        buildPath (PathElem s Nothing) = [s]
+        buildPath (PathElem s (Just (ArrWidth w))) = [s, show w]
         cExclusive p Nothing = return Nothing
         cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . props . ix p)
                          then do logMsg warn pos ("Property " ++ prop ++ " is mutually exlusive with " ++ p ++ ".  Unsetting " ++ p ++ ".")
@@ -238,16 +239,18 @@ cType pos prop rhs (Just x) =
     True -> return (Just ())
 cType _ _ _ Nothing = return Nothing
 
-buildPropLens e xs =
-  case foldl f (Right id) xs of
-    Left y -> Left y
-    Right _ -> Right $ foldl (.) id (map ix xs)
-  where f (Right x) y = case e ^? x . ix y of
-           Nothing -> Left y
-           Just a  -> Right (x . ix y)
 
--- No monoid instance for AST so forced to use ^.. which returns a list
-getDef syms scope def = head $ S.lkup syms scope def ^.. _Just
+--buildPropTraversal :: (t ~ Fix ElabF) => t -> [String] -> Either String (ReifiedTraversal t t t t)
+buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
+  where f y x =
+         case e ^? (runTraversal x . ix y) of
+            Nothing -> Left y
+            Just _  -> Right $ Traversal $ runTraversal x . ix y
+
+getDef syms scope def =
+  case S.lkup syms scope def of
+    Just s -> s
+    Nothing -> error ("No instance" ++ show def)
 
 elab (ti, syms) =
   map f ti
@@ -259,8 +262,5 @@ elab (ti, syms) =
 
 ereturn = return . Just . Fix
 assignProp k v = M.insert k (Just v)
-
-fromRight (Right a)  = a
-fromRight (Left _) = error "fromRight: is Left"
 
 

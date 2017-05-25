@@ -22,6 +22,8 @@ addrmap test {
       field {} f1;
    } reg2[4];
 
+   reg2[3].f1->hw = "rw";
+
    regfile {
       external regfile {
          sharedextbus;
