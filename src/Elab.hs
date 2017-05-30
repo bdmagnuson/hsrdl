@@ -12,6 +12,7 @@ module Elab (
 
 import Control.Monad.Identity
 import Control.Monad.Trans.Reader
+import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
 import Control.Comonad.Cofree
@@ -125,15 +126,17 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
           case (ctype def, arr) of
             (Field, _)      -> foo newinst >>= assignBits pos arr
             (_, Just (ArrWidth w)) -> do b <- elmAddr 1
-                                         x <- traverse id <$> mapM (\x -> instantiate (pos :< CompInst isext d (show x) Nothing (arrAlign b x))) [0..(w-1)]
+                                         x <- myMapM (\x -> instantiate (pos :< CompInst isext d (show x) Nothing (arrAlign b x))) [0..(w-1)]
                                          case x of
                                            Nothing -> return Nothing
                                            Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0
                                          where arrAlign b x = Alignment ((\y -> b + x * y) <$> stride) Nothing Nothing
+                                               myMapM f = runMaybeT . mapM (MaybeT . f)
+
             (Reg, Nothing) -> (foo newinst >>= assignAddress) <* resetBits
             otherwise -> setBaseAddress *> foo newinst
          where
-           isext = msum [env ^. rext, Types.ext def, iext]
+           isext = msum [env ^. rext, iext, Types.ext def]
            foo x   = withReaderT newenv  $ pushDefs *> foldl (>>=) x (map elaborate (expr def)) <* popDefs
                      where newenv = (scope .~ (sc ++ [d])) . (rext .~ isext)
            newinst =
@@ -175,9 +178,7 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
         else do
           new <- instantiate ins
           case new of
-            Nothing -> do
-              logMsg err pos ("Failed to instantiate " ++ show cn)
-              return Nothing
+            Nothing -> return Nothing
             Just a -> (return . Just) (i & _Fix . inst %~ (++ [a]))
 
 
