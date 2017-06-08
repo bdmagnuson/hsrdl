@@ -5,6 +5,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Elab (
      elab
    , getMsgs
@@ -18,7 +19,7 @@ import Control.Monad.Trans.Class
 import Control.Comonad.Cofree
 import Control.Comonad
 import Control.Lens hiding ((:<))
-import Debug.Trace
+import Data.Monoid ((<>))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
@@ -29,6 +30,8 @@ import Data.Maybe (isJust, fromMaybe, fromJust)
 import Props
 import Parser
 import Types
+import qualified Data.Text as T
+import Data.Text (Text)
 
 import Text.Show.Deriving
 
@@ -38,7 +41,7 @@ $(makeLenses ''ElabF)
 $(deriveShow1 ''ElabF)
 
 type instance IxValue (Fix ElabF) = Fix ElabF
-type instance Index (Fix ElabF) = String
+type instance Index (Fix ElabF) = Text
 
 instance Ixed (Fix ElabF) where
     ix k f m = case break (\x -> unfix x ^. Elab.name == k) (unfix m ^. inst) of
@@ -46,9 +49,9 @@ instance Ixed (Fix ElabF) where
                 (i, l:ls) -> f l <&> \x -> Fix $ unfix m & inst .~ (i ++ (x:ls))
 
 data Msgs = Msgs {
-    _info  :: [String],
-    _warn  :: [String],
-    _err   :: [String]
+    _info  :: [Text],
+    _warn  :: [Text],
+    _err   :: [Text]
 } deriving (Show)
 
 $(makeLenses ''Msgs)
@@ -59,7 +62,7 @@ data ElabState = ElabState {
     _usedbits :: Set.Set Integer,
     _nextbit  :: Integer,
     _baseAddr :: Integer,
-    _sprops   :: [M.Map CompType (M.Map String Property)]
+    _sprops   :: [M.Map CompType (M.Map Text Property)]
 } deriving (Show)
 
 $(makeLenses ''ElabState)
@@ -68,13 +71,13 @@ type ElabS = State ElabState
 
 data ReaderEnv = ReaderEnv {
     _rext   :: Maybe Bool,
-    _scope  :: [String],
+    _scope  :: [Text],
     _syms   :: S.SymTab (Expr SourcePos)
 }
 
 makeLenses ''ReaderEnv
 
-logMsg t pos m = lift $ (msgs . t) %= ((sourcePosPretty pos ++ " - " ++ m):)
+logMsg t pos m = lift $ (msgs . t) %= (((T.pack . sourcePosPretty) pos <> " - " <> m):)
 getMsgs x = reverse $ (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
 
 assignBits :: SourcePos -> Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
@@ -94,7 +97,7 @@ assignBits pos (Just arr) (Just (Fix reg)) = do
             lift (usedbits .= union)
             ereturn $ (reg & lsb .~ r) & (msb .~ l) & (props %~ assignProp "fieldwidth" (PropNum (l - r + 1)))
         else do
-            logMsg err pos ("Field overlap on bits " ++ (show . Set.toList) intersection)
+            logMsg err pos ("Field overlap on bits " <> (T.pack . show . Set.toList) intersection)
             return Nothing
     where
         range x y = if x < y then [x..y] else [y..x]
@@ -120,13 +123,13 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
     sp <- lift (use sprops)
     case S.lkup (env ^. syms) (env ^. scope) d of
         Nothing -> do
-            logMsg err pos ("Lookup failure: " ++ show d ++ " in " ++ show (env ^. scope))
+            logMsg err pos ("Lookup failure: " <> d <> " in " <> mconcat (env ^. scope))
             return Nothing
         Just (sc, _ :< def) ->
           case (ctype def, arr) of
             (Field, _)      -> foo newinst >>= assignBits pos arr
             (_, Just (ArrWidth w)) -> do b <- elmAddr 1
-                                         x <- myMapM (\x -> instantiate (pos :< CompInst isext d (show x) Nothing (arrAlign b x))) [0..(w-1)]
+                                         x <- myMapM (\x -> instantiate (pos :< CompInst isext d ((T.pack . show) x) Nothing (arrAlign b x))) [0..(w-1)]
                                          case x of
                                            Nothing -> return Nothing
                                            Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0
@@ -173,7 +176,7 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
     s <- lift get
     if isJust $ i ^? ix cn
         then do
-          logMsg err pos (cn ++  " already defined")
+          logMsg err pos (cn <>  " already defined")
           return Nothing
         else do
           new <- instantiate ins
@@ -185,7 +188,7 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
   case t of
     Left elm -> do
-      logMsg err pos ("invalid path, failed at " ++ show elm)
+      logMsg err pos ("invalid path, failed at " <> elm)
       return Nothing
     Right l -> do
       legal <- checkAssign pos (e ^? runTraversal l . _Fix) prop rhs
@@ -194,10 +197,10 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
         Nothing -> return Nothing
   where t = buildPropTraversal e (concatMap buildPath path)
         buildPath (PathElem s Nothing) = [s]
-        buildPath (PathElem s (Just (ArrWidth w))) = [s, show w]
+        buildPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
         cExclusive p Nothing = return Nothing
         cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . props . ix p)
-                         then do logMsg warn pos ("Property " ++ prop ++ " is mutually exlusive with " ++ p ++ ".  Unsetting " ++ p ++ ".")
+                         then do logMsg warn pos ("Property " <> prop <> " is mutually exlusive with " <> p <> ".  Unsetting " <> p <> ".")
                                  return $ e & _Just . _Fix . props . ix p .~ Nothing
                          else return e
 
@@ -218,7 +221,7 @@ checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
       sp <- lift (use sprops)
       case sp ^? ix 0 . ix (elm ^. etype) . ix prop of
         Nothing -> do
-          logMsg err pos ("Property " ++ prop ++ " not defined for component " ++ show (elm ^. etype))
+          logMsg err pos ("Property " <> prop <> " not defined for component " <> (T.pack . show) (elm ^. etype))
           return Nothing
         Just p -> return (Just p)
 
@@ -228,20 +231,19 @@ checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= cType pos prop rhs
       sp <- lift (use sprops)
       case msum $ map (\x -> sp ^? ix 0 . ix x . ix prop) [Signal, Field, Reg, Regfile, Addrmap] of
         Nothing -> do
-          logMsg err pos ("Property " ++ prop ++ " not defined for any component")
+          logMsg err pos ("Property " <> prop <> " not defined for any component")
           return Nothing
         Just p -> return (Just p)
 
 cType pos prop rhs (Just x) =
   case checktype (x ^. ptype) rhs of
     False -> do
-      logMsg err pos ("Type mismatch: Property '" ++ prop ++ "' expecting " ++ show (x ^. ptype) ++ " found " ++ show (typeOf rhs))
+      logMsg err pos ("Type mismatch: Property '" <> prop <> "' expecting " <> (T.pack . show) (x ^. ptype) <> " found " <> (T.pack . show) (typeOf rhs))
       return Nothing
     True -> return (Just ())
 cType _ _ _ Nothing = return Nothing
 
 
---buildPropTraversal :: (t ~ Fix ElabF) => t -> [String] -> Either String (ReifiedTraversal t t t t)
 buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
   where f y x =
          case e ^? (runTraversal x . ix y) of
@@ -251,7 +253,7 @@ buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
 getDef syms scope def =
   case S.lkup syms scope def of
     Just s -> s
-    Nothing -> error ("No instance" ++ show def)
+    Nothing -> error $ T.unpack ("No instance" <> def)
 
 elab (ti, syms) =
   map f ti

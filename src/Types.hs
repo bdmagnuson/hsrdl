@@ -26,14 +26,16 @@ import Control.Lens
 import Control.Monad.State
 import Control.Applicative
 import qualified Data.Set as Set
+import qualified Data.Text as T
+import Data.Text (Text)
 
-type Identifier = String
+type Identifier = Text
 type ElemPath = [(Identifier, Maybe Array)]
 
-data SymTab a = SymTab Int (M.Map String a)
+data SymTab a = SymTab Int (M.Map Text a)
 
 data PathElem = PathElem {
-    peName  :: String,
+    peName  :: Text,
     array   :: Maybe Array
 } deriving (Show, Eq)
 
@@ -41,29 +43,29 @@ data ExprF a =
      CompDef   {
         ext    :: Maybe Bool,
         ctype  :: CompType,
-        name   :: String,
+        name   :: Text,
         expr   :: [a]
      }
    | CompInst {
         ext    :: Maybe Bool,
-        def    :: String,
-        name   :: String,
+        def    :: Text,
+        name   :: Text,
         arr    :: Maybe Array,
         align  :: Alignment
      }
    | PropDef {
-        name     :: String,
+        name     :: Text,
         propType :: PropType,
         ctypes   :: [CompType],
         value    :: Maybe PropRHS
      }
    | PropDefault {
-        prop  :: String,
+        prop  :: Text,
         rhs   :: PropRHS
      }
    | PropAssign {
         path  :: [PathElem],
-        prop  :: String,
+        prop  :: Text,
         rhs   :: PropRHS
      }
    | TopExpr {
@@ -118,7 +120,7 @@ data PropType =
    | PropEnumT deriving (Eq)
 
 instance Show PropType where
-  show PropLitT  = "String"
+  show PropLitT  = "Text"
   show PropNumT  = "Numeric"
   show PropBoolT = "Boolean"
   show PropRefT  = "Reference"
@@ -130,7 +132,7 @@ data IsSticky = Sticky | NonSticky deriving (Show, Eq)
 data IntrType = Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
 
 data PropRHS =
-     PropLit  String
+     PropLit  Text
    | PropNum  Integer
    | PropBool Bool
    | PropRef  ElemPath Identifier
@@ -149,8 +151,8 @@ type PropDefs = M.Map CompType (M.Map Identifier Property)
 
 data ElabF a = ElabF {
     _etype :: CompType,
-    _name  :: String,
-    _props :: M.Map String (Maybe PropRHS),
+    _name  :: Text,
+    _props :: M.Map Text (Maybe PropRHS),
     _ext   :: Bool,
     _inst  :: [a],
     _lsb   :: Integer,

@@ -1,25 +1,31 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module SymbolTable (
       lkup,
       add,
-      SymTab,
-      empty
+      SymTab
    ) where
 
 import qualified Data.Map.Strict as M
 import Control.Lens
+import Control.Lens.At
 
-type Scope = [String]
-type Identifier = String
-type SymTab a = M.Map Scope (M.Map Identifier a)
+import qualified Data.Text as T
+import Data.Text (Text)
 
-empty         = M.empty
-add  t s n d  = t &  at s . non M.empty . at n ?~ d
+type Scope = [Text]
+type SymTab a = M.Map Text (M.Map Text a)
+
+add t s n d  = t & at sc . non M.empty . at n ?~ d
+    where sc = T.intercalate "," s
+
+lkup :: Eq a => SymTab a -> Scope -> Text -> Maybe (Scope, a)
 lkup t s n    =
-    case t ^. at s . non M.empty . at n of
+    case t ^. at sc . non M.empty . at n of
         Just a -> Just (s, a)
-        Nothing -> if null s then Nothing else lkup t (init s) n
+        Nothing -> if T.null sc then Nothing else lkup t (init s) n
+    where sc = T.intercalate "," s
 
 
 

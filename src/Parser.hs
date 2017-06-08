@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Parser (
        parseFile
@@ -11,13 +12,18 @@ import Control.Monad
 import Control.Comonad
 import Control.Comonad.Cofree
 import Text.Megaparsec hiding (State)
-import Text.Megaparsec.String
+import Text.Megaparsec.Text
 import Text.Megaparsec.Perm
 import qualified Text.Megaparsec.Lexer as L
 import qualified Data.Map.Strict as M
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
+import Data.Text.IO (readFile)
+
+import qualified Data.Text as T
+import Data.Text (Text, empty)
+import Data.Monoid ((<>))
 
 import Props
 import Types hiding (ElabF)
@@ -29,11 +35,11 @@ data ParseLoc =
 
 data ParseState = ParseState {
     loc      :: ParseLoc,
-    nam      :: String,
+    nam      :: Text,
     ext      :: Maybe Bool,
     anonIdx  :: Int,
     syms     :: S.SymTab (Expr SourcePos),
-    topInst  :: [String]
+    topInst  :: [Text]
 } deriving (Show)
 
 type SrdlParser = ReaderT ReaderEnv (StateT ParseState Parser)
@@ -54,23 +60,25 @@ dquote = symbol "\""
 
 lexeme = L.lexeme sc
 
-identifier = lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
+identifier = do
+  foo <- lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
+  return (T.pack foo)
 
 parseIdentifier' = identifier
 parseIdentifier  = do
   id <- identifier
-  when (id `elem` rws) (fail ("Can't use reserved word '" ++ id ++ "' as identifier"))
+  when (id `elem` rws) (fail (T.unpack $ "Can't use reserved word '" <> id <> "' as identifier"))
   return id
 
 symbol = L.symbol sc
 
 data ReaderEnv = ReaderEnv {
-    scope :: [String],
+    scope :: [Text],
     level :: Int
 }
 
-rword :: String -> ReaderT ReaderEnv (StateT ParseState Parser) ()
-rword w = lexeme $ string w *> notFollowedBy alphaNumChar *> sc
+rword :: Text -> ReaderT ReaderEnv (StateT ParseState Parser) ()
+rword w = lexeme $ string (T.unpack w) *> notFollowedBy alphaNumChar *> sc
 
 braces = between lbrace rbrace
 
@@ -102,7 +110,7 @@ parseCompName = do
     parseIdentifier <|> do
       idx <- lift get
       lift (modify (\s -> s {anonIdx = anonIdx s + 1}))
-      return $ "__anon_def" ++ show (anonIdx idx)
+      return $ "__anon_def" <> (T.pack . show) (anonIdx idx)
 
 addTopDef c name = do
     env <- ask
@@ -130,7 +138,7 @@ parseCompType =
    <|> parseRsvdRet "regfile" Regfile
    <|> parseRsvdRet "signal"  Signal
 
-parseRsvdRet :: String -> b -> ReaderT ReaderEnv (StateT ParseState Parser) b
+parseRsvdRet :: Text -> b -> ReaderT ReaderEnv (StateT ParseState Parser) b
 parseRsvdRet a b = do
    try (rword a)
    return b
@@ -144,16 +152,16 @@ parseExpCompInst = do
    parseExpr
 
 parseCompInst = do
-   s    <- lift get
-   env  <- ask
-   pos  <- getPosition
-   name <- parseIdentifier
-   arr  <- optional parseArray
+   s     <- lift get
+   env   <- ask
+   pos   <- getPosition
+   name  <- parseIdentifier
+   arr   <- optional parseArray
    align <- parseAlign
-   _    <- f $ S.lkup (syms s) (scope env) (nam s)
+   _     <- f $ S.lkup (syms s) (scope env) (nam s)
    return $ pos :< CompInst (Parser.ext s) (nam s) name arr align
-        where f (Just ([""], _ :< CompDef _ t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
-                                                         return ()
+        where f (Just ([empty], _ :< CompDef _ t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
+                                                            return ()
               f _ = return ()
 
 parseArray = try parseArray1 <|> parseArray2
@@ -246,10 +254,13 @@ parsePropDef = do
 
 parseNumeric = lexeme L.decimal
 
+type Foo a = ReaderT ReaderEnv (StateT ParseState Parser) a
+
+parseRHS :: Text -> ReaderT ReaderEnv (StateT ParseState Parser) PropRHS
 parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit
    where parseLit = do
-            a <- between dquote dquote (many (noneOf "\""))
-            return $ PropLit a
+            a <- between dquote dquote (many (Text.Megaparsec.noneOf ("\"" :: [Char])))
+            return $ PropLit (T.pack a)
          parseNum = do
             a <- parseNumeric
             return $ PropNum a
@@ -257,10 +268,10 @@ parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> pa
             a <- rword "true" *> return True <|> rword "false" *> return False
             return $ PropBool a
          parseEnum = do
-            a <- option "" (between dquote dquote (many (noneOf "\"")))
-            case a `elem` (getEnumValues prop) of
-              False -> fail $ "Legal values for " ++ prop ++ " are " ++ show (getEnumValues prop)
-              True -> return (PropEnum a)
+            a <- option "" (between dquote dquote (many (noneOf ("\"" :: [Char]))))
+            case (T.pack a) `elem` (getEnumValues prop) of
+              False -> (fail . T.unpack) $ "Legal values for " <> prop <> " are " <> (T.pack . show) (getEnumValues prop)
+              True -> return (PropEnum (T.pack a))
 
 rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "alias", "alignment", "all", "anded", "arbiter", "async", "bigendian",
@@ -282,7 +293,7 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
 
 pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" Nothing 0 M.empty [])
 
-hsrdlParseFile file = runParser pp file <$> readFile file
+hsrdlParseFile file = runParser pp file <$> Data.Text.IO.readFile file
 
 parseFile file = do
   p <- hsrdlParseFile file

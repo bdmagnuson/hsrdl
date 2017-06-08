@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Props (
        defDefs
      , getPropType
@@ -15,6 +16,9 @@ module Props (
 import qualified Data.Map.Strict as M
 import Control.Lens
 import Data.List (delete)
+
+import qualified Data.Text as T
+import Data.Text (Text)
 
 import Types
 
@@ -37,7 +41,7 @@ defNum n     = Property PropNumT (Just (PropNum n))
 defNothing a = Property a Nothing
 defEnum d    = Property PropEnumT (Just (PropEnum d))
 
-isEnum prop = any (== prop) ["hw", "sw", "priority", "precedence", "addressing"]
+isEnum prop = any (== prop) (["hw", "sw", "priority", "precedence", "addressing"] :: [Text])
 
 getEnumValues "hw" | (EnumDef m) <- accessType = M.keys m
 getEnumValues "sw" | (EnumDef m) <- accessType = M.keys m
@@ -72,7 +76,7 @@ isPropSet Nothing                 = False
 isPropSet (Just (PropBool False)) = False
 isPropSet (Just _)                = True
 
-getPropType :: String -> Maybe PropType
+getPropType :: Text -> Maybe PropType
 getPropType p = do
     compProps <- M.lookup Field defDefs
     prop <- M.lookup p compProps
@@ -127,6 +131,7 @@ defDefs = M.fromList [
 
 
 
+exMap :: M.Map Text [Text]
 exMap = foldl M.union M.empty (map f exSets)
   where f x = foldl (.) id [M.insert k (delete k x) | k <- x] M.empty
         exSets =
