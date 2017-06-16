@@ -47,7 +47,6 @@ getEnumValues "hw" | (EnumDef m) <- accessType = M.keys m
 getEnumValues "sw" | (EnumDef m) <- accessType = M.keys m
 
 p_intr          = ("intr",          defNothing PropIntrT)
-p_we            = ("we",            defFalse)
 p_hw            = ("hw",            defEnum "r")
 p_sw            = ("sw",            defEnum "rw")
 p_name          = ("name",          defNothing PropLitT)
@@ -58,7 +57,11 @@ p_rclr          = ("rclr",          defFalse)
 p_rset          = ("rset",          defFalse)
 p_hwclr         = ("hwclr",         defFalse)
 p_woclr         = ("woclr",         defFalse)
+p_nonsticky     = ("nonsticky",     defFalse)
+p_sticky        = ("sticky",        defFalse)
+p_stickybit     = ("stickybit",     defFalse)
 p_woset         = ("woset",         defFalse)
+p_we            = ("we",            defFalse)
 p_wel           = ("wel",           defFalse)
 p_swacc         = ("swacc",         defFalse)
 p_swmod         = ("swmod",         defFalse)
@@ -110,6 +113,9 @@ defDefs = M.fromList [
                         , p_incrthreshold
                         , p_decrthreshold
                         , p_intr
+                        , p_sticky
+                        , p_nonsticky
+                        , p_stickybit
                         ]),
 
    (Reg,     M.fromList [ p_desc

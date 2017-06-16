@@ -23,6 +23,7 @@ import Data.Monoid ((<>))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
+import Debug.Trace
 
 import SymbolTable as S
 import Data.Functor.Foldable
@@ -195,14 +196,15 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
       case legal of
         Just () -> foldl (>>=) ((return . Just) $ e & runTraversal l . _Fix . props %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
         Nothing -> return Nothing
+      where
+        cExclusive p Nothing = return Nothing
+        cExclusive p e = if isPropSet (fromJust $ e ^? _Just . runTraversal l . _Fix . props . ix p)
+                         then do logMsg warn pos ("Property " <> prop <> " is mutually exlusive with " <> p <> ".  Unsetting " <> p <> ".")
+                                 return $ e & _Just . runTraversal l . _Fix . props . ix p .~ Nothing
+                         else return e
   where t = buildPropTraversal e (concatMap buildPath path)
         buildPath (PathElem s Nothing) = [s]
         buildPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
-        cExclusive p Nothing = return Nothing
-        cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . props . ix p)
-                         then do logMsg warn pos ("Property " <> prop <> " is mutually exlusive with " <> p <> ".  Unsetting " <> p <> ".")
-                                 return $ e & _Just . _Fix . props . ix p .~ Nothing
-                         else return e
 
 
 elaborate d@(_ :< CompDef _ _ n _) e = return e
