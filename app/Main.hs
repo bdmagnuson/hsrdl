@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
 import Control.Monad
@@ -8,7 +9,16 @@ import Elab
 import Backends.Verilog
 import Data.Maybe (fromJust)
 
-import qualified Text.PrettyPrint.Leijen as P
+import Data.Text (unpack, pack)
+
+import System.IO
+import GHC.IO
+import Control.Lens
+
+import qualified Data.Text.Prettyprint.Doc.Render.Text
+import Data.Text.Prettyprint.Doc.Render.Text
+
+import Control.Monad.State
 
 main :: IO ()
 main = do
@@ -17,8 +27,14 @@ main = do
     then return ()
     else do
       case head $ elab (fromJust res) of
-        (Nothing, st) -> mapM_  putStrLn (getMsgs st)
+        (Nothing, st) -> mapM_  (putStrLn . unpack) (getMsgs st)
         (Just t, st) -> do
-          P.putDoc $ verilog' t
-          mapM_  putStrLn (getMsgs st)
+          putDoc $ verilog t
+          withFile "out.sv" WriteMode (flip hPutDoc (verilog t))
+          mapM_ (putStrLn . unpack)  (getMsgs st)
       return ()
+
+a = unsafePerformIO $ parseFile "test/srdl/user_prop.srdl"
+b = head $ elab (fromJust a)
+c = fromJust (b ^. _1)
+

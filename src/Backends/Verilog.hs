@@ -1,5 +1,6 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Backends.Verilog
   ( verilog
   ) where
@@ -118,40 +119,44 @@ getElem t fe e =
     else
       concatMap (getElem t fe) (e ^. _Fix . inst)
 
-
-verilog x = P.vcat $ map pretty [header (x ^. _Fix . name) fs es, wires fs, intrSummary rs, readMux rs es, syncUpdate fs es, combUpdate fs, footer]
+verilog x = P.vcat $ map pretty [header (x ^. _Fix . name) fs es, wires rs fs es, intrSummary rs, readMux rs es, syncUpdate fs es, combUpdate rs, footer]
    where rs = getElem isReg FilterInternal x'
          fs = getElem isField FilterInternal x'
          es = filterExt x'
          x'  = evalState (fqName x) []
 
-wires fs = toStrict $ renderMarkup [compileText|
-wire [31:0] _v_rdata;
-wire _v_ack;
-wire _v_err;
+wires rs fs es = toStrict $ renderMarkup [compileText|
+reg [31:0] _v_rdata;
+reg _v_ack;
+reg _v_err;
 
+%{forall r <- rs}
+reg #{fns r "acc"};
+%{endforall}
+%{forall e <- es}
+reg #{e ^. ename}_acc;
+%{endforall}
 %{forall f <- fs}
-%{case getNum f "fieldwidth"}
-%{of 1}
-reg _v_#{fns f "next"};
-%{of n}
-reg [#{n - 1}:0] _v_#{fns f "next"};
-%{endcase}
+reg #{arrayF f}_v_#{fns f "next"};
+reg #{arrayF f}_r_#{fn f};
 %{if snd (getIntr f "intr") /= NonIntr}
-wire #{fns f "intr"};
+reg _v_#{fns f "intr"};
+reg _r_#{fns f "intr"};
+reg #{arrayF f}_v_#{fns f "sticky_mask"};
+reg #{arrayF f}_r_#{fns f "sticky_mask"};
 %{endif}
 %{endforall}|]
 
 intrSummary rs = toStrict $ renderMarkup [compileText|
 %{forall r <- rs}
 %{if hasIntr r}
-wire #{fns r "intr"} = #{intrSigs r};
+wire _v_#{fns r "intr"} = #{intrSigs r};
 %{endif}
 %{endforall}|]
   where
     hasIntr r = not . null $ intrFields r
     intrFields r = filter (\x -> snd (getIntr x "intr") /= NonIntr) (r ^. _Fix . inst)
-    intrSigs r = (renderStrict . P.layoutPretty P.defaultLayoutOptions) $ P.hcat (P.punctuate " || " [pretty $ fns f "intr" | f <- intrFields r])
+    intrSigs r = (renderStrict . P.layoutPretty P.defaultLayoutOptions) $ P.hcat (P.punctuate " || " [pretty $ "_v_" <> fns f "intr" | f <- intrFields r])
 
 
 clog2 :: Integer -> Integer
@@ -201,6 +206,7 @@ module #{n} (
   input  wire        rd,
   input  wire        wr,
   input  wire [31:0] wdata,
+  input  wire [31:0] addr,
   output reg  [31:0] rdata,
   output reg         ack,
   output reg         err
@@ -208,13 +214,14 @@ module #{n} (
 |]
   where
     eaddr e = clog2 (e ^. elast - e ^. ebase) - 1
-    array :: Integer -> Text
-    array 1 = toStrict ""
-    array w = toStrict $ renderMarkup [compileText|[#{w - 1}:0]|]
-    arrayF f = array (getNum f "fieldwidth")
     hw_writable f = any (getEnum f "hw" ==) ["rw", "wr", "w"]
     hw_readable f = any (getEnum f "hw" ==) ["rw", "wr", "r"]
     iw f w p = toStrict $ renderMarkup [compileText|%{if getBool f p}input wire #{array w} #{fn f}_#{p},%{endif}|]
+
+array :: Integer -> Text
+array 1 = toStrict ""
+array w = toStrict $ renderMarkup [compileText|[#{w - 1}:0] |]
+arrayF f = array (getNum f "fieldwidth")
 
 footer ::  Text
 footer = toStrict $ renderMarkup [compileText|
@@ -228,30 +235,30 @@ fns f s = fn f <> "_" <> s
 readMux :: [Fix ElabF] -> [ExtInfo] -> Text
 readMux rs es  = toStrict $ renderMarkup [compileText|
 always_comb begin
-    v_ack = 1'b0;
-    v_err = 1'b0;
-    v_rdata = '0;
+    _v_ack = 1'b0;
+    _v_err = 1'b0;
+    _v_rdata = '0;
 %{forall r <- rs}
-    #{fn r} = 1'b0;
+    #{fn r}_acc = 1'b0;
 %{endforall}
 %{forall e <- es}
     #{e ^. ename}_acc = 1'b0;
 %{endforall}
   if (rd || wr) begin
-    v_ack = 1'b1;
+    _v_ack = 1'b1;
     case (addr)
 %{forall r <- rs}
       #{getNum r "address"} : #{fn r}_acc = 1'b1;
 %{endforall}
-      default : v_err = 1'b1;
+      default : _v_err = 1'b1;
     endcase
 
     case (1'b1)
 %{forall e <- es}
        (addr >= #{e ^. ebase}) && (addr <= #{e ^. elast}) : begin
            #{e ^. ename}_acc = 1'b1;
-           v_err = 1'b0;
-           v_ack = 1'b0;
+           _v_err = 1'b0;
+           _v_ack = 1'b0;
         end
 %{endforall}
     endcase
@@ -260,7 +267,7 @@ always_comb begin
 %{forall r <- rs}
        #{fn r}_acc : begin
 %{forall f <- getElem isField FilterInternal r}
-          v_rdata[#{view (_Fix . msb) f}:#{view (_Fix . lsb) f}] = _r_#{fn f};
+          _v_rdata[#{view (_Fix . msb) f}:#{view (_Fix . lsb) f}] = _r_#{fn f};
 %{endforall}
        end
 %{endforall}
@@ -283,56 +290,63 @@ always @(posedge clk or negedge rst_l) begin
     err   <= _v_err;
     rdata <= _v_rdata;
 %{forall f <- fs}
-    #{fn f} <= _v_#{fn f};
+    #{fn f} <= _v_#{fn f}_next;
 %{endforall}
 %{forall e <- es}
-    #{e ^. ename}_rd <= rd && #{e ^. ename}_swacc;
-    #{e ^. ename}_wr <= wr && #{e ^. ename}_swacc;
-    if (#{e ^. ename}_swacc)
+    #{e ^. ename}_rd <= rd && #{e ^. ename}_acc;
+    #{e ^. ename}_wr <= wr && #{e ^. ename}_acc;
+    if (#{e ^. ename}_acc)
        #{e ^. ename}_addr <= addr - #{e ^. ebase};
 %{endforall}
   end
 end
 |]
 
-combUpdate fs = toStrict $ renderMarkup [compileText|
-%{forall f <- fs}
+combUpdate rs = toStrict $ renderMarkup [compileText|
+%{forall r <- rs}
+%{forall f <- getElem  isField FilterInternal r}
 
 always_comb begin
-  #{next f} = r_#{fn f};
+  #{next f} = #{fn f};
 %{if isIntr f}
-  #{intr f} = r_#{intr f};
-  #{fns f "sticky_mask"} = r_#{fns f "sticky_mask"};
+  _v_#{intr f} = _r_#{intr f};
+  _v_#{fns f "sticky_mask"} = _r_#{fns f "sticky_mask"};
 %{endif}
 %{if getBool f "rclr"}
-  if (rd && #{fns f "acc"})
+  if (rd && #{fns r "acc"})
     #{next f} = '0;
 %{if isIntr f}
-    #{fns f "sticky_mask"} = '0;
-    #{intr f} = '0;
+    _v_#{fns f "sticky_mask"} = '0;
+    _v_#{intr f} = '0;
 %{endif}
   end
 %{endif}
 %{if getBool f "rset"}
-  if (rd && #{fns f "acc"})
+  if (rd && #{fns r "acc"})
     #{next f} = '1;
 %{endif}
 %{if hw_writable f}
 
-  if (we && #{fns f "acc"}) begin
+%{if getBool f "we"}
+  if (wr && #{fns f "we"} && #{fns r "acc"}) begin
+%{elseif getBool f "wel"}
+  if (wr && #{fns f "wel"} && #{fns r "acc"}) begin
+%{else}
+  if (wr && #{fns r "acc"}) begin
+%{endif}
 %{if getBool f "woset"}
-    #{next f} = #{next f} | sw_wdata;
+    #{next f} = #{next f} | wdata;
 %{elseif getBool f "woclr"}
-    #{next f} = #{next f} & ~sw_wdata
+    #{next f} = #{next f} & ~wdata
 %{if isIntr f}
-    #{intr f} = #{intr f} && #{next f} != 0);
-    #{sticky_mask f} = #{sticky_mask f} & ~sw_wdata;
+    _v_#{intr f} = _v_#{intr f} && #{next f} != 0);
+    _v_#{fns f "sticky_mask"} = _v_#{fns f "sticky_mask"} & ~wdata;
 %{endif}
 %{else}
-    #{next f} = sw_wdata;
+    #{next f} = wdata;
 %{if isIntr f}
-    #{intr f} = 0;
-    #{sticky_mask f} = 'b0;
+    _v_#{intr f} = 0;
+    _v_#{fns f "sticky_mask"} = 'b0;
 %{endif}
 %{endif}
   end
@@ -395,16 +409,17 @@ always_comb begin
 
 %{case intrType f}
 %{of Level}
-  #{intr f} = #{next f};
+  _v_#{intr f} = |#{next f};
 %{of Posedge}
-  #{intr f} = |(#{next f} & ~#{prev f});
+  _v_#{intr f} = |(#{next f} & ~#{prev f});
 %{of Negedge}
-  #{intr f} = |(~#{next f} & #{prev f});
+  _v_#{intr f} = |(~#{next f} & #{prev f});
 %{of Bothedge}
-  #{intr f} = #{next f} != #{prev f};
+  _v_#{intr f} = #{next f} != #{prev f};
 %{endcase}
 %{endif}
 end
+%{endforall}
 %{endforall}|]
   where
     sticky f      = fst (getIntr f "intr")
@@ -417,6 +432,5 @@ end
     incrvalue f   = getNum f "incrvalue"
     decrvalue f   = getNum f "decrvalue"
     prev f        = fn f
-    sticky_mask f = fn f <> "_sticky_mask"
     isCounter f   = getBool f "counter"
     hw_writable f = any (getEnum f "hw" ==) ["rw", "wr", "w"]
