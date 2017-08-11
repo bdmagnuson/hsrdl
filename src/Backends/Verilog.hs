@@ -1,370 +1,422 @@
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeFamilies #-}
 module Backends.Verilog
-  ( verilog'
-  , fff
+  ( verilog
   ) where
 
 import Control.Lens
+import Control.Monad.State
 import Data.Functor.Foldable
-import Text.StringTemplate
-import Text.Show.Deriving
+import Data.Text.Lazy (toStrict)
+import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
+import Data.Text (Text)
 import qualified Data.Map.Strict as M
-
-import Text.PrettyPrint.Leijen (Doc, (<>), (<+>))
-import qualified Text.PrettyPrint.Leijen as P
+import qualified Data.Set as S
+import qualified Data.Text.Prettyprint.Doc as P
+import Data.Text.Prettyprint.Doc.Render.Text (renderStrict)
+import Text.Blaze.Renderer.Text
+import Text.Heterocephalus
+import Text.Show.Deriving
+import Debug.Trace
 
 import Elab
-import Types (ElabF(..), CompType(..), PropRHS(..))
-import Data.Maybe (fromJust, fromMaybe, isJust)
-import Data.List (intersperse)
+import Props (assignProp)
+import Types (ElabF(..), CompType(..), PropRHS(..), IntrType(..))
 
 $(makePrisms ''Fix)
 $(makePrisms ''PropRHS)
 $(makeLenses ''ElabF)
 
-instance Monoid P.Doc where
-  mempty = P.empty
-  mappend = (<>)
+data ExtInfo = ExtInfo {
+  _ebase :: Integer,
+  _elast :: Integer,
+  _ename :: Text
+}
 
-instance Stringable P.Doc where
-  stFromString = P.text
-  stToString = flip P.displayS "" . P.renderCompact
-
-data FieldInfo = FieldInfo {
-    _fname  :: String,
-    _fprops :: M.Map String (Maybe PropRHS),
-    _flsb   :: Integer,
-    _fmsb   :: Integer
-} deriving (Show)
-
-makeLenses ''FieldInfo
-
-data RegInfo = RegInfo {
-    _rname   :: String,
-    _rprops  :: M.Map String (Maybe PropRHS),
-    _rfields :: [FieldInfo]
-} deriving (Show)
-
-makeLenses ''RegInfo
+makeLenses ''ExtInfo
 
 data RegsFilter = FilterInternal | FilterExternal | FilterNone
 
-filterExt :: Fix ElabF -> [(String, Integer, Integer)]
+getProp t e p =
+  case e ^? _Fix . props . ix p . _Just . t of
+    Just b -> b
+    _ -> trace (show (e ^. _Fix . name, p)) (error "you dun f'd up")
+
+getBool = getProp _PropBool
+getNum  = getProp _PropNum
+getEnum = getProp _PropEnum
+getIntr = getProp _PropIntr
+getRef  = getProp _PropRef
+getLit  = getProp _PropLit
+
+referenced e p = S.member p (e ^. _Fix . propRef)
+
+getPropF t e p =
+  case e ^? props . ix p . _Just . t of
+    Just b -> b
+    _ -> error "you dun f'd up"
+
+getBoolF = getPropF _PropBool
+getNumF  = getPropF _PropNum
+getEnumF = getPropF _PropEnum
+getLitF  = getPropF _PropLit
+
+filterExt :: Fix ElabF -> [ExtInfo]
 filterExt x = cata f x
-  where f a@(ElabF t n p e i l m) =
+  where f a@(ElabF t n p pr e i l m) =
           case t of
             Field -> []
             Array -> childRanges
             otherwise ->
-              case fromJust $ p ^? ix "sharedextbus" . _Just . _PropBool of
-                True  -> case (minimumOf (traverse . _2) childRanges,
-                               maximumOf (traverse . _3) childRanges) of
+              case getBoolF a "sharedextbus" of
+                True  -> case (minimumOf (traverse . ebase) childRanges,
+                               maximumOf (traverse . elast) childRanges) of
                   (Nothing, _) -> []
                   (_, Nothing) -> []
-                  (Just a, Just b) -> [(n, a, b)]
+                  (Just a, Just b) -> [ExtInfo {_ebase = a, _elast = b, _ename = n}]
                 False -> case (t, e) of
                            (Reg, False) -> []
-                           (Reg, True) -> [(n, l, l)]
+                           (Reg, True) -> [ExtInfo {_ebase = l, _elast = l, _ename = n}]
                            otherwise -> childRanges
             where
-              childRanges = map (over _1 (combine t n)) (concat i)
-              l = fromJust $ p ^? ix "address" . _Just . _PropNum
-              getAddress x  = fromJust (getNumProp x "address")
+              childRanges = map (over ename (combine t n)) (concat i)
+              l = getNumF a "address"
+              getAddress x  = getNum x  "address"
               combine Addrmap n = id
-              combine Array n = (n ++)
-              combine _ n = ((n ++ "_") ++)
+              combine Array n = (n <>)
+              combine _ n = ((n <> "_") <>)
+
+fqName :: Fix ElabF -> State [(CompType, Text)] (Fix ElabF)
+fqName e = do
+  modify (\x -> x ++ [(e ^. _Fix . etype, e ^. _Fix . name)])
+  p <- get
+  r <- mapM fqName (e ^. _Fix . inst)
+  let u = e & _Fix . props %~ assignProp "fqname" (PropLit (pathName p))
+            & _Fix . inst  .~ r
+  modify init
+  return u
+  where
+    pathName = pathName' ""
+    pathName' p [] = p
+    pathName' p ((_, n):[]) = p <> n
+    pathName' p ((t1, n1):xs@((t2, _):_)) = let delim = case (t1, t2) of
+                                                 (Array, _) -> ""
+                                                 (_, Field) -> "__"
+                                                 _          -> "_"
+                                            in pathName' (p <> n1 <> delim) xs
+
+isReg e   = e ^. _Fix . etype == Reg
+isField e = e ^. _Fix . etype == Field
+
+getElem :: (Fix ElabF -> Bool) -> RegsFilter -> Fix ElabF -> [Fix ElabF]
+getElem t fe e =
+  if t e
+    then case fe of
+      FilterNone -> [e]
+      FilterInternal -> if e ^. _Fix . ext then [] else [e]
+      FilterExternal -> if e ^. _Fix . ext then [e] else []
+    else
+      concatMap (getElem t fe) (e ^. _Fix . inst)
 
 
-getRegs' :: RegsFilter -> Fix ElabF -> [RegInfo]
-getRegs' fe (Fix (ElabF t n p ext i l m)) =
-  case t of
-    Reg -> case fe of
-      FilterNone -> r
-      FilterInternal -> if ext then [] else r
-      FilterExternal -> if ext then r else []
-    Addrmap   -> concatMap (getRegs' fe)  i
-    Array     -> map (\x -> x & rname %~ \x -> n ++ x) (concatMap (getRegs' fe) i)
-    _ -> map (\x -> x & rname %~ \x -> n ++ "_" ++ x)  (concatMap (getRegs' fe) i)
-    where 
-      r = [RegInfo {_rname = n, _rprops = p, _rfields = concatMap getFields i}]
+verilog x = P.vcat $ map pretty [header (x ^. _Fix . name) fs es, wires fs, intrSummary rs, readMux rs es, syncUpdate fs es, combUpdate fs, footer]
+   where rs = getElem isReg FilterInternal x'
+         fs = getElem isField FilterInternal x'
+         es = filterExt x'
+         x'  = evalState (fqName x) []
 
-getRegs fe x = map f (getRegs' fe x)
-    where f a = a & rfields %~ map (\x -> x & fname %~ (\y -> a ^. rname ++ "__" ++ y))
+wires fs = toStrict $ renderMarkup [compileText|
+wire [31:0] _v_rdata;
+wire _v_ack;
+wire _v_err;
 
-getFields :: Fix ElabF -> [FieldInfo]
-getFields (Fix (ElabF Field n p ext i l m)) =
-  [FieldInfo {
-    _fname  = n,
-    _fprops = p,
-    _flsb   = l,
-    _fmsb   = m
-  }]
+%{forall f <- fs}
+%{case getNum f "fieldwidth"}
+%{of 1}
+reg _v_#{fns f "next"};
+%{of n}
+reg [#{n - 1}:0] _v_#{fns f "next"};
+%{endcase}
+%{if snd (getIntr f "intr") /= NonIntr}
+wire #{fns f "intr"};
+%{endif}
+%{endforall}|]
 
+intrSummary rs = toStrict $ renderMarkup [compileText|
+%{forall r <- rs}
+%{if hasIntr r}
+wire #{fns r "intr"} = #{intrSigs r};
+%{endif}
+%{endforall}|]
+  where
+    hasIntr r = not . null $ intrFields r
+    intrFields r = filter (\x -> snd (getIntr x "intr") /= NonIntr) (r ^. _Fix . inst)
+    intrSigs r = (renderStrict . P.layoutPretty P.defaultLayoutOptions) $ P.hcat (P.punctuate " || " [pretty $ fns f "intr" | f <- intrFields r])
 
-map1 f1 f2 []  = []
-map1 f1 f2 [x] = [f2 x]
-map1 f1 f2 (x:xs) = f1 x : map1 f1 f2 xs
-
-block d1 d2 i b  = P.vcat [d1, P.indent i b, d2]
-
-alwaysComb    = block (P.text "always_comb begin") (P.text "end") 3
-caseBlock v i = block (P.text "case (" <> v <> P.text ")") (P.text "endcase") 3 (P.vcat i)
-
-ifBlock  c b = block (P.text "if (" <> c <> P.text ") begin") (P.text "end") 3 (P.vcat b)
-ifElseBlock c p n = ifBlock c p <> block (P.text "else begin") (P.text "end") 3 (P.vcat n)
-
-alwaysCR cn rn r a = block open close 3 body
-  where open  = P.text "always @(posedge" <+> P.text cn <+> P.text "or negedge" <+> P.text rn <> P.text ") begin"
-        close = P.text "end"
-        body  = ifElseBlock (P.char '!' <> P.text rn) r a
-
-caseItem :: Doc -> [Doc] -> Doc
-caseItem i [x] = i <+> P.colon <+> x
-caseItem i  x  = block (i <+> P.colon <+> P.text "begin") (P.text "end") 3 (P.vcat x)
-
-arrayWi 1 = P.empty
-arrayWi w = P.brackets (P.integer (w - 1) <> P.colon <> P.integer 0)
-
-arrayW f = arrayWi (f ^. fmsb - f ^. flsb + 1)
-
-arrayLR f
-    | m /= l = P.brackets (P.integer m <> P.colon <> P.integer l)
-    | otherwise = P.empty
-    where m = f ^. fmsb
-          l = f ^. flsb
-
-arrayLR' f = P.brackets (P.integer m <> P.colon <> P.integer l)
-    where m = f ^. fmsb
-          l = f ^. flsb
-
-getProp  e p a = e ^? rprops . ix p . _Just . a
-getfProp e p a = e ^? fprops . ix p . _Just . a
-
-getNumProp   e p = getProp  e p _PropNum
-
-getfNumProp  e p = getfProp e p _PropNum
-getfBoolProp e p = getfProp e p _PropBool
-getfIntrProp e = getfProp e "intr" _PropIntr
-
-getfEnumProp e p | Just (v) <- getfProp e p _PropEnum = Just v
-getfEnumProp e p | Nothing  <- getfProp e p _PropEnum = error p
-
-
-fieldInstTemplate = newSTMP $ unlines [
-  "srdField u_field_$inst$ #(",
-  "   .WIDTH($width$),",
-  "   .RCLR($rclr$),",
-  "   .RSET($rset$),",
-  "   .SW(\"$sw$\"),",
-  "   .HW(\"$hw$\"),",
-  "   .COUNTER($counter$),",
-  "   .INCRWIDTH($incrwidth$),",
-  "   .DECRWIDTH($decrwidth$)",
-  ") (",
-  "   .clk(clk),",
-  "   .rst_l(rst_l),",
-  "   .intr($intr$),",
-  "   .intr_reg($intr_reg$),",
-  "   .sw_wdata(wdata),",
-  "   .hw_wdata($hw_wdata$),",
-  "   .hw_we($hw_we$),",
-  "   .rd(rd),",
-  "   .wr(wr),",
-  "   .acc($acc$),",
-  "   .incr($incr$),",
-  "   .decr($decr$),",
-  "   .incrvalue($incrvalue$),",
-  "   .decrvalue($decrvalue$),",
-  "   .overflow($overflow$),",
-  "   .underflow($underflow$),",
-  "   .incrsaturate_lhs($incrsaturate_lhs$),",
-  "   .decrsaturate_lhs($decrsaturate_lhs$),",
-  "   .incrsaturate_rhs($rhscrsaturate_rhs$),",
-  "   .decrsaturate_rhs($decrsaturate_rhs$),",
-  "   .incrthreshold_lhs($incrthreshold_lhs$),",
-  "   .decrthreshold_lhs($decrthreshold_lhs$),",
-  "   .incrthreshold_rhs($rhscrthreshold_rhs$),",
-  "   .decrthreshold_rhs($decrthreshold_rhs$),",
-  "   .q($q$)",
-  ")",
-  ""
-  ]
 
 clog2 :: Integer -> Integer
 clog2 x = ceiling (logBase 2 (fromIntegral x))
 
-data Sigs =
-    EmptyS
-  | Lit    String
-  | Input  String Integer
-  | Output String Integer
-  | Wire   String Integer deriving (Ord, Eq)
 
-isInput (Input _ _)   = True
-isInput _             = False
-isOutput (Output _ _) = True
-isOutput _            = False
-isWire (Wire _ _)     = True
-isWire _              = False
+header :: Text -> [Fix ElabF] -> [ExtInfo] -> Text
+header n fs es = toStrict $ renderMarkup [compileText|
+`default_nettype none
+module #{n} (
+  input  wire clk,
+  input  wire rst_l,
 
-sig2wire EmptyS       = ""
-sig2wire (Lit a)      = a
-sig2wire (Input  a 1) = a
-sig2wire (Output a 1) = a
-sig2wire (Wire   a 1) = a
-sig2wire (Input  a w) = a ++ "[" ++ show (w - 1) ++ ":0]"
-sig2wire (Output a w) = a ++ "[" ++ show (w - 1) ++ ":0]"
-sig2wire (Wire   a w) = a ++ "[" ++ show (w - 1) ++ ":0]"
+%{forall f <- fs}
+%{if hw_readable f}
+  output reg #{arrayF f}  #{fn f},
+%{endif}
+%{if hw_writable f}
+  input wire #{arrayF f}  #{fn f}_wrdat,
+%{endif}
+%{if getBool f "we"}
+  input wire #{fns f "we"},
+%{endif}
+%{if getBool f "wel"}
+  input wire #{fns f "wel"},
+%{endif}
+%{if getBool f "swacc"}
+  input wire #{fns f "swacc"},
+%{endif}
+%{if getBool f "swmod"}
+  input wire #{fns f "swmod"},
+%{endif}
+%{if getBool f "counter"}
+  input wire #{array (getNum f "incrwidth")} #{fns f "incr"},
+  input wire #{array (getNum f "incrwidth")} #{fns f "decr"},
+%{endif}
+%{endforall}
+%{forall e <- es}
+  output reg #{e ^. ename}_rd,
+  output reg #{e ^. ename}_wr,
+  output reg [#{eaddr e}:0] #{e ^. ename}_addr,
+  output reg [31:0] #{e ^. ename}_wdata,
+  input wire [31:0] #{e ^. ename}_rdata,
+  input wire [31:0] #{e ^. ename}_ack,
+%{endforall}
 
-getfprop e p =
-  case e ^? fprops . ix p . _Just of
-    Nothing -> Nothing
-    Just (PropLit a)      -> Just (Lit a)
-    Just (PropNum a)      -> Just (Lit (show a))
-    Just (PropBool True)  -> Just (Lit "1")
-    Just (PropBool False) -> Just (Lit "0")
-    Just (PropRef a _)    -> Just (Wire "ref!" 1)
-    Just (PropPath a)     -> Just (Wire "path!" 1)
-    Just (PropEnum e)     -> Just (Lit e)
-
-
-filterDups x = M.keys (filterDups' M.empty x)
+  input  wire        rd,
+  input  wire        wr,
+  input  wire [31:0] wdata,
+  output reg  [31:0] rdata,
+  output reg         ack,
+  output reg         err
+);
+|]
   where
-    filterDups' m [] = m
-    filterDups' m (x:xs) = if M.member x m then filterDups' m xs else filterDups' (M.insert x True m) xs
+    eaddr e = clog2 (e ^. elast - e ^. ebase) - 1
+    array :: Integer -> Text
+    array 1 = toStrict ""
+    array w = toStrict $ renderMarkup [compileText|[#{w - 1}:0]|]
+    arrayF f = array (getNum f "fieldwidth")
+    hw_writable f = any (getEnum f "hw" ==) ["rw", "wr", "w"]
+    hw_readable f = any (getEnum f "hw" ==) ["rw", "wr", "r"]
+    iw f w p = toStrict $ renderMarkup [compileText|%{if getBool f p}input wire #{array w} #{fn f}_#{p},%{endif}|]
 
+footer ::  Text
+footer = toStrict $ renderMarkup [compileText|
+endmodule
+`default_nettype wire
+|]
 
-fieldInst :: (RegInfo, FieldInfo) -> ([Sigs], StringTemplate Doc)
-fieldInst (r, f) = (sigs, foldl (.) id (map fn io ++ map fnp params) fieldInstTemplate)
-  where io = ordIO ++ incrIO ++ decrIO ++ intrIO
-        n  = f ^. fname
-        fw = (f ^. fmsb) - (f ^. flsb) + 1
-        getBool x  = fromJust $ getfBoolProp f x
-        getNum  x  = fromJust $ getfNumProp  f x
-        getEnum x  = fromJust $ getfEnumProp f x
-        getNumT x  = show (getNum x)
-        getBoolT x = if getBool x then "1" else "0"
-        ife cond (a, b, c) = if cond then (a, c) else (a, b)
-        zero w = Lit $ show w ++ "'b0"
-        one  w = Lit $ show w ++ "'b1"
-        fn  (p, v) = setAttribute p (sig2wire v)
-        fnp (p, v) = setAttribute p v
-        sigs = filterDups $ filter (\x -> isInput x || isOutput x || isWire x) (map snd io)
-        hw_wr = (getEnum "hw" == "rw") || (getEnum "hw" == "wr") || (getEnum "hw" == "w")
-        hw_we = getBool "we"
-        params =
-          [ ("inst"    , n)
-          , ("width"   , getNumT  "fieldwidth")
-          , ("rclr"    , getBoolT "rclr")
-          , ("rset"    , getBoolT "rset")
-          , ("hw"      , getEnum  "hw")
-          , ("sw"      , getEnum  "sw")
-          , ("counter" , getBoolT "counter")
-          ]
-        ordIO =
-          [ ("q"        , Output n fw)
-          , ("hw_wdata" , if hw_wr then Input (n ++ "_wrdat") fw else zero fw)
-          , ("hw_we"    , case (hw_wr, hw_we) of
-                            (False,     _) -> zero 1
-                            ( True, False) -> one 1
-                            ( True,  True) -> Input (n ++ "_we") 1)
-          , ("acc"      , Wire ("_" ++ n ++ "_swacc") 1)
-          ]
-        intrIO = if isJust (getfIntrProp f)
-                 then [("intr", Wire (n ++ "_intr") 1), ("intr_reg", Wire ((r ^. rname) ++ "_intr_reg") 1)]
-                 else [("intr_reg", zero 1)]
-        c = fromJust $ getfBoolProp f "counter"
-        decrIO :: [(String, Sigs)]
-        decrIO = map (ife c) [ ("decr"              , zero 1   , fromMaybe (Input (n ++ "_decr") 1) (getfprop f "decr"))
-                             , ("decrvalue"         , zero 1   , fromMaybe (Input (n ++ "_decr") 1) (getfprop f "decr"))
-                             , ("underflow"         , EmptyS    , if isJust (getfprop f "decrsaturate") then EmptyS else Lit (n ++ "_underflow"))
-                             , ("decrsaturate_lhs"  , zero fw   , fromMaybe (zero fw) (getfprop f "decrsaturate"))
-                             , ("decrthreshold_lhs" , zero fw   , fromMaybe (one fw) (getfprop f "decrthreshold"))
-                             , ("decrsaturate_rhs"  , EmptyS    , Wire (n ++ "_decrsaturate") 1)
-                             , ("decrthreshold_rhs" , EmptyS    , Wire (n ++ "_decrthreshold") 1)
-                             ]
-        incrIO = map (ife c) [ ("incr"              , zero 1   , fromMaybe (Input (n ++ "_incr") 1) (getfprop f "incr"))
-                             , ("incrvalue"         , zero 1   , fromMaybe (Input (n ++ "_incr") 1) (getfprop f "incr"))
-                             , ("overflow"          , EmptyS    , if isJust (getfprop f "incrsaturate") then EmptyS else Lit (n ++ "_underflow"))
-                             , ("incrsaturate_lhs"  , zero fw   , fromMaybe (zero fw) (getfprop f "incrsaturate"))
-                             , ("incrthreshold_lhs" , zero fw   , fromMaybe (one fw) (getfprop f "incrthreshold"))
-                             , ("incrsaturate_rhs"  , EmptyS    , Wire (n ++ "_incrsaturate") 1)
-                             , ("incrthreshold_rhs" , EmptyS    , Wire (n ++ "_incrthreshold") 1)
-                             ]
+fn f = getLit f "fqname"
+fns f s = fn f <> "_" <> s
 
+readMux :: [Fix ElabF] -> [ExtInfo] -> Text
+readMux rs es  = toStrict $ renderMarkup [compileText|
+always_comb begin
+    v_ack = 1'b0;
+    v_err = 1'b0;
+    v_rdata = '0;
+%{forall r <- rs}
+    #{fn r} = 1'b0;
+%{endforall}
+%{forall e <- es}
+    #{e ^. ename}_acc = 1'b0;
+%{endforall}
+  if (rd || wr) begin
+    v_ack = 1'b1;
+    case (addr)
+%{forall r <- rs}
+      #{getNum r "address"} : #{fn r}_acc = 1'b1;
+%{endforall}
+      default : v_err = 1'b1;
+    endcase
 
-fff x = show (filterExt x)
+    case (1'b1)
+%{forall e <- es}
+       (addr >= #{e ^. ebase}) && (addr <= #{e ^. elast}) : begin
+           #{e ^. ename}_acc = 1'b1;
+           v_err = 1'b0;
+           v_ack = 1'b0;
+        end
+%{endforall}
+    endcase
 
-extSig (n, l, h) =
-  [ Output (n ++ "_wr") 1
-  , Output (n ++ "_rd") 1
-  , Output (n ++ "_wdata") 32 --regwidth
-  , Input  (n ++ "_rdata") 32 --regwidth
-  , Input  (n ++ "_ack") 1
-  , Wire ("_" ++ n ++ "_swacc") 1
-  ] ++ (if l == h then [] else [Output (n ++ "_addr") (clog2 (h - l))])
+    case (1'b1)
+%{forall r <- rs}
+       #{fn r}_acc : begin
+%{forall f <- getElem isField FilterInternal r}
+          v_rdata[#{view (_Fix . msb) f}:#{view (_Fix . lsb) f}] = _r_#{fn f};
+%{endforall}
+       end
+%{endforall}
+    endcase
+  end
+end
+|]
 
-verilog' x = P.vcat $ intersperse P.empty [mheader, wires, intrSummary r, insts, readMux r e, syncBlock e, P.text "endmodule", P.empty]
-  where r = getRegs FilterInternal x
-        e = filterExt x
-        f = concatMap (\x -> zip (repeat x) (x ^. rfields)) r
-        (intSigs, fields) = unzip (map fieldInst f) & _1 %~ concat
-        sigs = intSigs ++ extSigs
-        extSigs = concatMap extSig e
-        insts = P.vcat $ map render fields
-        mheader = header' (x ^. _Fix . name) sigs
-        wires = P.vcat $ map ff (filter isWire sigs)
-        ff (Wire a w) = P.text "wire" <+> arrayWi w <+> P.text a <> P.semi
+syncUpdate fs es = toStrict $ renderMarkup [compileText|
+always @(posedge clk or negedge rst_l) begin
+  if (!rst_l) begin
+    ack   <= 1'b0;
+    err   <= 1'b0;
+    rdata <= '0;
+%{forall f <- fs}
+    #{fn f} <= #{getNum f "reset"};
+%{endforall}
+  end else begin
+    ack   <= _v_ack;
+    err   <= _v_err;
+    rdata <= _v_rdata;
+%{forall f <- fs}
+    #{fn f} <= _v_#{fn f};
+%{endforall}
+%{forall e <- es}
+    #{e ^. ename}_rd <= rd && #{e ^. ename}_swacc;
+    #{e ^. ename}_wr <= wr && #{e ^. ename}_swacc;
+    if (#{e ^. ename}_swacc)
+       #{e ^. ename}_addr <= addr - #{e ^. ebase};
+%{endforall}
+  end
+end
+|]
 
-intrSummary r = P.vcat $ map f r
-  where f x = if null intrFields
-                then P.empty
-                else
-                  printSummary (x ^. rname) (intrFields ^.. traverse . fname)
-              where
-                intrFields = filter (\x -> isJust (getfIntrProp x)) (x ^. rfields)
-                printSummary r fs = P.text "wire" <+> P.text r <> P.text "_reg_intr = " <> P.hcat (intersperse (P.text " || ") [P.text x <> P.text "_intr" | x <- fs]) <> P.semi
+combUpdate fs = toStrict $ renderMarkup [compileText|
+%{forall f <- fs}
 
+always_comb begin
+  #{next f} = r_#{fn f};
+%{if isIntr f}
+  #{intr f} = r_#{intr f};
+  #{fns f "sticky_mask"} = r_#{fns f "sticky_mask"};
+%{endif}
+%{if getBool f "rclr"}
+  if (rd && #{fns f "acc"})
+    #{next f} = '0;
+%{if isIntr f}
+    #{fns f "sticky_mask"} = '0;
+    #{intr f} = '0;
+%{endif}
+  end
+%{endif}
+%{if getBool f "rset"}
+  if (rd && #{fns f "acc"})
+    #{next f} = '1;
+%{endif}
+%{if hw_writable f}
 
-header' n sigs = block d1 (P.text ");") 3 (P.vcat $ map1 f1 f2 (filter (\x -> isInput x || isOutput x) sigs))
-    where d1 = P.text "module" <+> P.text n <+> P.lparen
-          f1 x = f2 x <> P.char ','
-          f2 (Input  a w) = P.text "input"  <+> arrayWi w <+> P.text a
-          f2 (Output a w) = P.text "output" <+> arrayWi w <+> P.text a
+  if (we && #{fns f "acc"}) begin
+%{if getBool f "woset"}
+    #{next f} = #{next f} | sw_wdata;
+%{elseif getBool f "woclr"}
+    #{next f} = #{next f} & ~sw_wdata
+%{if isIntr f}
+    #{intr f} = #{intr f} && #{next f} != 0);
+    #{sticky_mask f} = #{sticky_mask f} & ~sw_wdata;
+%{endif}
+%{else}
+    #{next f} = sw_wdata;
+%{if isIntr f}
+    #{intr f} = 0;
+    #{sticky_mask f} = 'b0;
+%{endif}
+%{endif}
+  end
+%{endif}
+%{if isCounter f}
 
-readMux r e = alwaysComb $ P.vcat $ intersperse P.empty [swaccDefault, swaccAssign, intReadAssign, extReadAssign]
+%{if referenced f "underflow"}
+  underflow = 0;
+%{endif}
+%{if referenced f "overflow"}
+  overflow = 0;
+%{endif}
+   case (#{decr f}, #{incr f})
+      reg wrap;
+      2'b01 : begin
+         {wrap, #{next f} = #{next f} + #{incrvalue f}
+%{if getBool f "incrsaturate"}
+         if (wrap || #{next f} > #{getNum f "incrsaturate"})
+            #{next f} = #{getNum f "incrsaturate"};
+%{endif}
+%{if referenced f "overflow"}
+         #{fns f "overflow"} = wrap;
+%{endif}
+      end
+      2'b10 : begin
+         {wrap, #{next f} = #{next f} + #{decrvalue f}
+%{if getBool f "decrsaturate"}
+         if (wrap || #{next f} < #{getNum f "decrsaturate"})
+            #{next f} = #{getNum f "decrsaturate"};
+%{endif}
+%{if referenced f "underflow"}
+         #{fns f "underflow"} = wrap;
+%{endif}
+      end
+      2'b11 : begin
+         reg underflow;
+         reg overflow;
+
+         {wrap, #{next f}} = #{next f} + #{incrvalue f} - #{decrvalue f};
+         underflow = wrap && (#{decrvalue f} > #{incrvalue f})
+         overflow  = wrap && (#{decrvalue f} < #{incrvalue f})
+%{if referenced f "underflow"}
+         #{fns f "underflow"} = underflow;
+%{endif}
+%{if referenced f "underflow"}
+         #{fns f "overflow"} = overflow;
+%{endif}
+%{if getBool f "decrsaturate"}
+         if (underflow || (#{next f} < #{getNum f "decrsaturate"})
+            #{next f} = #{getNum f "decrsaturate"}
+%{endif}
+%{if getBool f "incrsaturate"}
+         if (overflow || (#{next f} > #{getNum f "incrsaturate"})
+            #{next f} = #{getNum f "incrsaturate"}
+%{endif}
+      end
+   endcase
+%{endif}
+%{if isIntr f}
+
+%{case intrType f}
+%{of Level}
+  #{intr f} = #{next f};
+%{of Posedge}
+  #{intr f} = |(#{next f} & ~#{prev f});
+%{of Negedge}
+  #{intr f} = |(~#{next f} & #{prev f});
+%{of Bothedge}
+  #{intr f} = #{next f} != #{prev f};
+%{endcase}
+%{endif}
+end
+%{endforall}|]
   where
-    swaccDefault  = P.vcat $ concat [[P.text "_v_ack = 1'b0;"], intDefault, extDefault]
-    intDefault    = map (\r ->       swacc (r ^. rname) <+> P.text "= 1'b0;") r
-    extDefault    = map (\(n,_,_) -> swacc n <+> P.text "= 1'b0;") e
-    swaccAssign   = ifBlock (P.text "rd || wr") [P.text "_v_ack = 1'b1;", intCase, extCase]
-    intCase       = caseBlock (P.text "addr") $ map (\r -> caseItem (P.text "addr ==" <+> getAddress r) [swacc (r ^. rname) <> P.text " = 1'b1;"]) r
-    extCase       = caseBlock (P.text "1'b1") $ map (\(m, h, l) -> caseItem (P.text "addr >=" <+> P.integer h <+> P.text "|| addr <=" <+> P.integer l)
-                                                                            [P.char '_' <> P.text m <> P.text "_swacc = 1'b1;", P.text "_v_ack = 1'b0;"]) e
-
-    getAddress x  = P.integer $ fromJust (getNumProp x "address")
-    intReadAssign    = P.text "_v_rdata = '0;" P.<$$> caseBlock (P.text "1'b1") (map (\r -> caseItem (swacc (r ^. rname)) (map swaccFields (r ^. rfields))) r)
-    extReadAssign    = P.vcat $ map (\(x,_,_) -> ifBlock (rd x) [P.text "_v_ack = 1'b1;", (P.text "_v_rdata =" <+> (suffix x "rdata") <> P.semi)]) e
-    swaccFields f = P.text "_v_rdata" <> arrayLR' f <+> P.equals <+> P.text (f ^. fname) <> P.semi
-    rd        x   = suffix x "rd"
-
-swacc     x   = suffix x "swacc"
-suffix x s    = P.char '_' <> P.text x <> P.char '_' <> P.text s
-
-syncBlock e = alwaysCR "clk" "rst_l" rb cb
-  where rb = [P.text "ack <= 1'b0;", P.text "rdata <= '0;"] ++ (map (\(Output n _) -> P.text n <+> P.text "<= '0;") outputs)
-        cb = [P.text "ack <= _v_ack;", P.text "rdata <= _v_rdata;"] ++ concatMap f e
-        f (n, l, h) = map ($ n)
-          [ \x -> P.text n <> P.text "_rd   <= rd &&" <+> swacc n <> P.semi
-          , \x -> P.text n <> P.text "_wr   <= wr &&" <+> swacc n <> P.semi
-          , \x -> P.text n <> P.text "_addr <= addr -" <+> P.integer l <> P.semi
-          ]
-        outputs = filter isOutput (concatMap extSig e)
-
-
+    sticky f      = fst (getIntr f "intr")
+    intrType f    = snd (getIntr f "intr")
+    incr f        = fns f "incr"
+    decr f        = fns f "decr"
+    next f        = "_v_" <> fns f "next"
+    intr f        = fns f "intr"
+    isIntr f      = snd (getIntr f "intr") /= NonIntr
+    incrvalue f   = getNum f "incrvalue"
+    decrvalue f   = getNum f "decrvalue"
+    prev f        = fn f
+    sticky_mask f = fn f <> "_sticky_mask"
+    isCounter f   = getBool f "counter"
+    hw_writable f = any (getEnum f "hw" ==) ["rw", "wr", "w"]

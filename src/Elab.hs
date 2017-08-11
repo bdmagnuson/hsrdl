@@ -21,11 +21,11 @@ import Control.Comonad
 import Control.Lens hiding ((:<))
 import Data.Monoid ((<>))
 import qualified Data.Map.Strict as M
-import qualified Data.Set as Set
+import qualified Data.Set as S
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
 import Debug.Trace
 
-import SymbolTable as S
+import SymbolTable as ST
 import Data.Functor.Foldable
 import Data.Maybe (isJust, fromMaybe, fromJust)
 import Props
@@ -60,7 +60,7 @@ $(makeLenses ''Msgs)
 data ElabState = ElabState {
     _msgs     :: Msgs,
     _addr     :: Integer,
-    _usedbits :: Set.Set Integer,
+    _usedbits :: S.Set Integer,
     _nextbit  :: Integer,
     _baseAddr :: Integer,
     _sprops   :: [M.Map CompType (M.Map Text Property)]
@@ -73,7 +73,7 @@ type ElabS = State ElabState
 data ReaderEnv = ReaderEnv {
     _rext   :: Maybe Bool,
     _scope  :: [Text],
-    _syms   :: S.SymTab (Expr SourcePos)
+    _syms   :: ST.SymTab (Expr SourcePos)
 }
 
 makeLenses ''ReaderEnv
@@ -88,24 +88,24 @@ assignBits pos (Just arr) (Just (Fix reg)) = do
     used <- lift (use usedbits)
     nb   <- lift (use nextbit)
     let (l, r, set) = case arr of
-          ArrLR l r  -> (l, r, Set.fromList $ range l r)
-          ArrWidth w -> (nb + w - 1, nb, Set.fromList $ range nb (nb+w-1))
-    let intersection = Set.intersection used set
-    let union        = Set.union used set
+          ArrLR l r  -> (l, r, S.fromList $ range l r)
+          ArrWidth w -> (nb + w - 1, nb, S.fromList $ range nb (nb+w-1))
+    let intersection = S.intersection used set
+    let union        = S.union used set
     if null intersection
         then do
             lift (nextbit .= l + 1)
             lift (usedbits .= union)
             ereturn $ (reg & lsb .~ r) & (msb .~ l) & (props %~ assignProp "fieldwidth" (PropNum (l - r + 1)))
         else do
-            logMsg err pos ("Field overlap on bits " <> (T.pack . show . Set.toList) intersection)
+            logMsg err pos ("Field overlap on bits " <> (T.pack . show . S.toList) intersection)
             return Nothing
     where
         range x y = if x < y then [x..y] else [y..x]
 
 resetBits = do
     lift (nextbit .= 0)
-    lift (usedbits .= Set.empty)
+    lift (usedbits .= S.empty)
     return ()
 
 roundMod x m =
@@ -122,7 +122,7 @@ instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
     env <- ask
     sp <- lift (use sprops)
-    case S.lkup (env ^. syms) (env ^. scope) d of
+    case ST.lkup (env ^. syms) (env ^. scope) d of
         Nothing -> do
             logMsg err pos ("Lookup failure: " <> d <> " in " <> mconcat (env ^. scope))
             return Nothing
@@ -133,7 +133,7 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
                                          x <- myMapM (\x -> instantiate (pos :< CompInst isext d ((T.pack . show) x) Nothing (arrAlign b x))) [0..(w-1)]
                                          case x of
                                            Nothing -> return Nothing
-                                           Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0
+                                           Just ff -> ereturn $ ElabF Array n M.empty S.empty (fromMaybe False isext) ff 0 0
                                          where arrAlign b x = Alignment ((\y -> b + x * y) <$> stride) Nothing Nothing
                                                myMapM f = runMaybeT . mapM (MaybeT . f)
 
@@ -148,6 +148,7 @@ instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
                { _etype = ctype def
                , _name  = n
                , _props = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
+               , _propRef = S.empty
                , _inst  = []
                , _ext   = fromMaybe False isext
                , _lsb   = 0
@@ -253,7 +254,7 @@ buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
             Just _  -> Right $ Traversal $ runTraversal x . ix y
 
 getDef syms scope def =
-  case S.lkup syms scope def of
+  case ST.lkup syms scope def of
     Just s -> s
     Nothing -> error $ T.unpack ("No instance" <> def)
 
@@ -261,11 +262,10 @@ elab (ti, syms) =
   map f ti
     where
         env = ReaderEnv {_scope = [""], _syms = syms, _rext = Nothing}
-        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = Set.empty, _baseAddr = 0, _sprops = [defDefs]}
+        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs]}
         f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
             where pos = extract $ getDef syms [""] x ^. _2
 
 ereturn = return . Just . Fix
-assignProp k v = M.insert k (Just v)
 
 

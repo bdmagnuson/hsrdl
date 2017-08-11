@@ -1,4 +1,7 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE ViewPatterns #-}
+
 module Backends.Verilog.AST
   ( Expr (..)
   , Stmt (..)
@@ -7,18 +10,23 @@ module Backends.Verilog.AST
   , ModuleItem (..)
   , IODecl (..)
   , IODirection (..)
-  , LHS
   , Sense (..)
   , Range
-  , showExpr
-  , showStmt
-  , showModuleItem
-  , showModule
+  , replaceM
+  , replaceE
+  , replaceS
+  , reduceM
+  , reduceE
+  , reduceS
   ) where
 
 import Data.Text (Text)
 import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
 import qualified Data.Text.Prettyprint.Doc as P
+import Data.Bifunctor
+import qualified Data.BitVector as BV
+import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 
 type Identifier = Text
 
@@ -38,129 +46,178 @@ data ModuleItem
   | Logic   (Maybe Range) [Identifier]
   | AlwaysComb Stmt
   | Always [Sense] Stmt
-  | ContAssign LHS Expr
-  | Instance Identifier [(Identifier, Maybe Expr)] Identifier [(Identifier, Maybe Expr)] deriving (Show)
+  | ContAssign Expr Expr
+  | Instance Identifier [(Identifier, Maybe Expr)] Identifier [(Identifier, Maybe Expr)] deriving (Show, Eq)
 
 data Sense
   = Posedge  Identifier
   | Negedge  Identifier
-  | Bothedge Identifier deriving (Show)
+  | Bothedge Identifier deriving (Show, Eq)
 
 data Stmt =
-    If Expr Stmt [(Expr, Stmt)] (Maybe Stmt)
+    If (Expr, Stmt) [(Expr, Stmt)] (Maybe Stmt)
   | Block (Maybe Identifier) [Stmt]
   | Case Expr [(Expr, Stmt)]
-  | NBAssign LHS Expr
-  | Assign LHS Expr deriving (Show)
-
-type LHS = [(Identifier, Maybe Range)]
+  | NBAssign Expr Expr
+  | Assign Expr Expr
+  | Null deriving (Show, Eq)
 
 data Base
   = Dec
   | Hex
   | Bin
-  | Oct deriving (Show)
+  | Oct deriving (Show, Eq, Ord)
 
-instance P.Pretty Base where
-  pretty Dec = pretty 'b'
-  pretty Hex = pretty 'h'
-  pretty Bin = pretty 'b'
-  pretty Oct = pretty 'o'
-
-instance P.Pretty Sense where
-  pretty (Posedge i) = pretty "posedge" <+> pretty i
-  pretty (Negedge i) = pretty "negedge" <+> pretty i
-  pretty (Bothedge i) = pretty i
+infixr 2 :||:
+infixr 2 :|:
+infixr 3 :&&:
+infixr 3 :&:
+infix 4 :==:
+infix 4 :!=:
+infix 4 :>=:
+infix 4 :<=:
+infix 4 :>:
+infix 4 :<:
+infixl 6 :+:
+infixl 6 :-:
 
 data Expr where
-  SizedNum    :: Integer -> Base -> Integer -> Expr
-  Num         :: Integer -> Expr
-  Lit         :: Text -> Expr
-  LogicalNot  :: Expr -> Expr
-  BitwiseNot  :: Expr -> Expr
-  (:&&:)      :: Expr -> Expr -> Expr
-  (:||:)      :: Expr -> Expr -> Expr
-  (:&:)       :: Expr -> Expr -> Expr
-  (:|:)       :: Expr -> Expr -> Expr
-  (:==:)      :: Expr -> Expr -> Expr
-  (:!=:)      :: Expr -> Expr -> Expr
-  (:>:)       :: Expr -> Expr -> Expr
-  (:<:)       :: Expr -> Expr -> Expr
-  (:>=:)      :: Expr -> Expr -> Expr
-  (:<=:)      :: Expr -> Expr -> Expr
-  (:-:)       :: Expr -> Expr -> Expr
-  (:+:)       :: Expr -> Expr -> Expr
-  Paren       :: Expr -> Expr
-  Concat      :: [Expr] -> Expr
-  deriving (Show)
+  SizedNum       :: Base -> BV.BV -> Expr
+  Num            :: BV.BV -> Expr
+  Ident          :: Text -> Maybe Range -> Expr
+  LogicalNot     :: Expr -> Expr
+  BitwiseNot     :: Expr -> Expr
+  Ternary        :: Expr -> Expr -> Expr -> Expr
+  ReductionAnd   :: Expr -> Expr
+  ReductionOr    :: Expr -> Expr
+  ReductionOrNot :: Expr -> Expr
+  ReductionXor   :: Expr -> Expr
+  StringLit      :: Text -> Expr
+  (:&&:)         :: Expr -> Expr -> Expr
+  (:||:)         :: Expr -> Expr -> Expr
+  (:&:)          :: Expr -> Expr -> Expr
+  (:|:)          :: Expr -> Expr -> Expr
+  (:==:)         :: Expr -> Expr -> Expr
+  (:!=:)         :: Expr -> Expr -> Expr
+  (:>:)          :: Expr -> Expr -> Expr
+  (:<:)          :: Expr -> Expr -> Expr
+  (:>=:)         :: Expr -> Expr -> Expr
+  (:<=:)         :: Expr -> Expr -> Expr
+  (:-:)          :: Expr -> Expr -> Expr
+  (:+:)          :: Expr -> Expr -> Expr
+  Paren          :: Expr -> Expr
+  Concat         :: [Expr] -> Expr
+  deriving (Show, Eq, Ord)
 
-block d1 d2 i b  = P.vcat [d1, P.nest i b, d2]
 
-showStmt (Block _ []) = pretty "begin end"
-showStmt (Block (Just n) x) = pretty "begin : " <> pretty n <> P.hardline <> P.nest 3 (P.vsep $ map showStmt x) <> P.hardline <> pretty "end"
-showStmt (Block Nothing x)  = pretty "begin" <> P.nest 3 (P.vcat $ (P.emptyDoc:(map showStmt x))) <> P.hardline <> pretty "end"
+replaceM :: M.Map Expr Expr -> ModuleItem -> ModuleItem
+replaceM m (AlwaysComb s)     = AlwaysComb (replaceS m s)
+replaceM m (Always sn s)      = Always sn (replaceS m s)
+replaceM m (ContAssign e1 e2) = ContAssign (replaceE m e1) (replaceE m e2)
+replaceM _ m = m
 
-showStmt (Case e cs) = pretty "case" <+> P.parens (showExpr e) <> P.nest 3 (P.vcat $ (P.emptyDoc:(map showCaseItem cs))) <> P.hardline <> pretty "endcase"
-  where showCaseItem (e, s) = showExpr e <+> P.colon <+> showStmt s
+replaceES m  = bimap (replaceE m) (replaceS m)
 
-showStmt (If cond iftrue elseif els) =
-  pretty "if" <+> P.parens (showExpr cond) <+> ptrue <+> pelseif <+> pelse
-  where
-    ptrue   = showStmt iftrue
-    pelseif = P.vcat $ map (\(c, b) -> pretty "else if" <+> P.parens (showExpr c) <+> showStmt b) elseif
-    pelse   = case els of
-               Nothing -> P.emptyDoc
-               (Just b) -> pretty "else" <+> showStmt b
+replaceS m (If e elseif els)  = If (replaceES m e) (map (replaceES m) elseif) (fmap (replaceS m) els)
+replaceS m (Block ident s)    = Block ident (map (replaceS m) s)
+replaceS m (Case e c)         = Case (replaceE m e) (map (replaceES m) c)
+replaceS m (NBAssign e1 e2)   = NBAssign (replaceE m e1) (replaceE m e2)
+replaceS m (Assign e1 e2)     = Assign (replaceE m e1) (replaceE m e2)
+replaceS m Null               = Null
 
-showStmt (NBAssign lhs expr) = showLHS lhs <+> P.equals <+> showExpr expr <> P.semi
-showStmt (Assign lhs expr) = showLHS lhs <+> pretty "<=" <+> showExpr expr <> P.semi
+replaceE m i@(Ident _ _)      = fromMaybe i (M.lookup i m)
+replaceE m (LogicalNot e)     = LogicalNot (replaceE m e)
+replaceE m (BitwiseNot e)     = BitwiseNot (replaceE m e)
+replaceE m (ReductionAnd e)   = ReductionAnd (replaceE m e)
+replaceE m (ReductionOr e)    = ReductionOr (replaceE m e)
+replaceE m (ReductionOrNot e) = ReductionOrNot (replaceE m e)
+replaceE m (ReductionXor e)   = ReductionXor (replaceE m e)
+replaceE m (e1 :&&: e2)       = (replaceE m e1) :&&: (replaceE m e2)
+replaceE m (e1 :||: e2)       = (replaceE m e1) :||: (replaceE m e2)
+replaceE m (e1 :&:  e2)       = (replaceE m e1) :&:  (replaceE m e2)
+replaceE m (e1 :|:  e2)       = (replaceE m e1) :|:  (replaceE m e2)
+replaceE m (e1 :==: e2)       = (replaceE m e1) :==: (replaceE m e2)
+replaceE m (e1 :!=: e2)       = (replaceE m e1) :!=: (replaceE m e2)
+replaceE m (e1 :<:  e2)       = (replaceE m e1) :<:  (replaceE m e2)
+replaceE m (e1 :>:  e2)       = (replaceE m e1) :>:  (replaceE m e2)
+replaceE m (e1 :<=: e2)       = (replaceE m e1) :<=: (replaceE m e2)
+replaceE m (e1 :>=: e2)       = (replaceE m e1) :>=: (replaceE m e2)
+replaceE m (e1 :-:  e2)       = (replaceE m e1) :-:  (replaceE m e2)
+replaceE m (e1 :+:  e2)       = (replaceE m e1) :+:  (replaceE m e2)
+replaceE m (Paren e)          = Paren (replaceE m e)
+replaceE m (Concat e)         = Concat (map (replaceE m) e)
+replaceE _ e = e
 
-vconcat = P.encloseSep P.lbracket P.rbracket P.comma
+reduceES  = bimap reduceE reduceS
 
-showLHS [x] = showLHSelem x
-showLHS x = vconcat (map showLHSelem x)
-showLHSelem (i, Nothing) = pretty i
-showLHSelem (i, Just (l, r)) = pretty i <> P.brackets (pretty l <> P.colon <> pretty r)
+pattern Zero    <- Num ((0 ==) . BV.int -> True)
+pattern NonZero <- Num ((0 ==) . BV.int -> False)
 
-showExpr (SizedNum w b v) = pretty w <> pretty "'" <> pretty b <> pretty v
-showExpr (Num i) = pretty i
-showExpr (Lit l) = pretty l
-showExpr (BitwiseNot e) = pretty "~" <> showExpr e
-showExpr (LogicalNot e) = pretty "!" <> showExpr e
-showExpr (e1 :&&: e2) = showExpr e1 <+> pretty "&&" <+> showExpr e2
-showExpr (e1 :||: e2) = showExpr e1 <+> pretty "||" <+> showExpr e2
-showExpr (e1 :&:  e2) = showExpr e1 <+> pretty "&"  <+> showExpr e2
-showExpr (e1 :|:  e2) = showExpr e1 <+> pretty "|"  <+> showExpr e2
-showExpr (e1 :+:  e2) = showExpr e1 <+> pretty "+"  <+> showExpr e2
-showExpr (e1 :-:  e2) = showExpr e1 <+> pretty "-"  <+> showExpr e2
-showExpr (e1 :==: e2) = showExpr e1 <+> pretty "==" <+> showExpr e2
-showExpr (e1 :!=: e2) = showExpr e1 <+> pretty "!=" <+> showExpr e2
-showExpr (e1 :>:  e2) = showExpr e1 <+> pretty ">"  <+> showExpr e2
-showExpr (e1 :>=: e2) = showExpr e1 <+> pretty ">=" <+> showExpr e2
-showExpr (e1 :<:  e2) = showExpr e1 <+> pretty "<"  <+> showExpr e2
-showExpr (e1 :<=: e2) = showExpr e1 <+> pretty "<=" <+> showExpr e2
-showExpr (Paren e1) = P.parens (showExpr e1)
-showExpr (Concat e) = vconcat (map showExpr e)
+zero = Num (BV.zeros 1)
+one  = Num (BV.ones 1)
 
-showModuleItem (AlwaysComb b) = pretty "always_comb" <+> showStmt b
+zeroBV = BV.zeros 1
+oneBV  = BV.ones 1
 
-showModuleItem (Always sense stmt) = pretty "always @" <> P.parens (showSense sense) <+> showStmt stmt
-  where showSense [] = P.emptyDoc
-        showSense (s:[]) = pretty s
-        showSense (s:ss) = pretty s <+> pretty "or" <+> showSense ss
+foldrBV f s l = foldr f s (BV.split (BV.size l) l)
 
-sep = P.encloseSep P.emptyDoc P.emptyDoc
-vcatL x = P.vcat $ (P.emptyDoc:x)
+bitBlast v = BV.split (BV.size v) v
 
-showIO (IODecl d n r) = showD <+> showR <+> showN
-  where showD = case d of
-                 Input  -> pretty "input"
-                 Output -> pretty "output"
-                 Inout  -> pretty "input"
-        showR = case r of
-                  Nothing -> P.emptyDoc
-                  Just (m, l) -> P.brackets (pretty m <> P.colon <> pretty l)
-        showN = pretty n
+reduceM' :: ModuleItem -> ModuleItem
+reduceM' (AlwaysComb s)     = AlwaysComb (reduceS s)
+reduceM' (Always sn s)      = Always sn (reduceS s)
+reduceM' (ContAssign e1 e2) = ContAssign (reduceE e1) (reduceE e2)
+reduceM' m = m
 
-showModule (Module id ios i) = pretty "module" <+> pretty id <+> P.tupled (map showIO ios) <> P.semi <> vcatL (map showModuleItem i) <> pretty "endmodule"
+reduceS' (If (Zero, s) (e:es) els) = If (reduceES e) (map reduceES es) (fmap reduceS els)
+reduceS' (If (Zero, s) [] Nothing) = Null
+reduceS' (If (Zero, s) [] (Just els)) = els
+reduceS' (If (NonZero, s) _ _) = s
+
+
+reduceE' (LogicalNot     Zero) = one
+reduceE' (LogicalNot     NonZero) = zero
+reduceE' (BitwiseNot     (Num b)) = Num (BV.not b)
+reduceE' (ReductionAnd   (Num b)) = Num (BV.and (bitBlast b))
+reduceE' (ReductionOr    (Num b)) = Num (BV.or  (bitBlast b))
+--reduceE' (ReductionXor   (Num b)) = Num (BV.xor (bitBlast b))
+reduceE' (ReductionOrNot (Num b)) = Num (BV.not (BV.or (bitBlast b)))
+
+reduceE' (Zero    :&&:       _) = zero
+reduceE' (_       :&&:    Zero) = zero
+reduceE' (NonZero :&&: NonZero) = one
+
+reduceE' (NonZero :||:       _) = one
+reduceE' (_       :||: NonZero) = one
+reduceE' (Zero    :||:     Zero) = zero
+
+reduceE' (Num e1 :|: Num e2)  = Num ((BV..|.) e1  e2)
+reduceE' (Num e1 :&: Num e2)  = Num ((BV..&.) e1  e2)
+
+reduceE' (Num e1 :==: Num e2)  = if e1 == e2 then one else zero
+reduceE' (Num e1 :!=: Num e2)  = if (BV./=.) e1  e2 then one else zero
+reduceE' (Num e1 :>:  Num e2)  = if (BV.>.)  e1 e2 then one else zero
+reduceE' (Num e1 :<:  Num e2)  = if (BV.<.)  e1 e2 then one else zero
+reduceE' (Num e1 :>=: Num e2)  = if (BV.>=.) e1  e2 then one else zero
+reduceE' (Num e1 :<=: Num e2)  = if (BV.<=.) e1  e2 then one else zero
+
+reduceE' (e1 :==: e2)  = (reduceE e1 :==: reduceE e2)
+reduceE' (e1 :!=: e2)  = (reduceE e1 :!=: reduceE e2)
+reduceE' (e1 :>:  e2)  = (reduceE e1 :>:  reduceE e2)
+reduceE' (e1 :<:  e2)  = (reduceE e1 :<:  reduceE e2)
+reduceE' (e1 :>=: e2)  = (reduceE e1 :>=: reduceE e2)
+reduceE' (e1 :<=: e2)  = (reduceE e1 :<=: reduceE e2)
+
+reduceE' e = e
+
+reduceE e = reapply reduceE' e
+reduceS s = reapply reduceS' s
+reduceM s = reapply reduceM' s
+
+
+reapply f s = g $ iterate f s
+  where g (x:x':xs) = if x == x' then x else g (x':xs)
+
+
+
 

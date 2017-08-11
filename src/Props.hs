@@ -11,6 +11,7 @@ module Props (
      , getEnumValues
      , isPropSet
      , exMap
+     , assignProp
      ) where
 
 import qualified Data.Map.Strict as M
@@ -35,18 +36,20 @@ checktype x y = x == typeOf y
 
 accessType = EnumDef (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na", 4)])
 
+assignProp k v = M.insert k (Just v)
 
 defFalse     = Property PropBoolT (Just (PropBool False))
 defNum n     = Property PropNumT (Just (PropNum n))
 defNothing a = Property a Nothing
 defEnum d    = Property PropEnumT (Just (PropEnum d))
+defIntr      = Property PropIntrT (Just (PropIntr NonSticky NonIntr))
 
 isEnum prop = any (== prop) (["hw", "sw", "priority", "precedence", "addressing"] :: [Text])
 
 getEnumValues "hw" | (EnumDef m) <- accessType = M.keys m
 getEnumValues "sw" | (EnumDef m) <- accessType = M.keys m
 
-p_intr          = ("intr",          defNothing PropIntrT)
+p_intr          = ("intr",          defIntr)
 p_hw            = ("hw",            defEnum "r")
 p_sw            = ("sw",            defEnum "rw")
 p_name          = ("name",          defNothing PropLitT)

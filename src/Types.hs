@@ -25,7 +25,7 @@ import qualified Data.Map.Strict as M
 import Control.Lens
 import Control.Monad.State
 import Control.Applicative
-import qualified Data.Set as Set
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Text (Text)
 
@@ -129,7 +129,7 @@ instance Show PropType where
   show PropEnumT = "Enumeration"
 
 data IsSticky = Sticky | NonSticky deriving (Show, Eq)
-data IntrType = Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
+data IntrType = NonIntr | Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
 
 data PropRHS =
      PropLit  Text
@@ -153,6 +153,7 @@ data ElabF a = ElabF {
     _etype :: CompType,
     _name  :: Text,
     _props :: M.Map Text (Maybe PropRHS),
+    _propRef :: S.Set Text,
     _ext   :: Bool,
     _inst  :: [a],
     _lsb   :: Integer,

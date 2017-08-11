@@ -73,7 +73,7 @@ data RegInfo = RegInfo
 
 data FieldInfo = FieldInfo
   { _fname       :: Text
-  , _frname       :: Text
+  , _frname      :: Text
   , _field       :: Fix ElabF
   } deriving (Show)
 
