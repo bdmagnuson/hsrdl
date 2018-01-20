@@ -71,7 +71,7 @@ data ExprF a =
    | TopExpr {
         exprs :: [a]
      }
-   deriving (Show, Functor, Traversable, Foldable, Eq)
+   deriving (Show, Functor,  Eq)
 
 type Expr a = Cofree ExprF a
 
@@ -149,16 +149,17 @@ makeLenses ''Property
 
 type PropDefs = M.Map CompType (M.Map Identifier Property)
 
+
+
 data ElabF a = ElabF {
-    _etype :: CompType,
-    _name  :: Text,
-    _props :: M.Map Text (Maybe PropRHS),
-    _propRef :: S.Set Text,
-    _ext   :: Bool,
-    _inst  :: [a],
-    _lsb   :: Integer,
-    _msb   :: Integer
-} deriving (Show, Functor, Traversable, Foldable)
+    _etype     :: CompType,
+    _name      :: Text,
+    _props     :: M.Map Text (Maybe PropRHS),
+    _postProps :: [([PathElem], Text, PropRHS)],
+    _inst      :: [a],
+    _ealign     :: Alignment,
+    _offset    :: Integer
+} deriving (Show, Functor)
 
 
 

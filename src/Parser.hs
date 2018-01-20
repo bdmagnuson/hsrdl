@@ -125,7 +125,7 @@ parseCompDef = do
    env   <- ask
    when ((cType == Addrmap) && (level env == 0)) (lift (modify (\s -> s {topInst = topInst s ++ [name]})))
    let def = pos :< CompDef ext cType name expr
-   lift (modify $ \s -> s { syms = S.add (syms s) (scope env) name def})
+   lift (modify $ \s -> s { syms = S.add (scope env) name def (syms s)})
    _ <- try semi <|> do
                         lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
                         return ""

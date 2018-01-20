@@ -5,8 +5,8 @@ import Control.Monad
 import Debug.Trace
 
 import Parser
-import Elab
-import Backends.Verilog
+import Elab2
+--import Backends.Verilog
 import Data.Maybe (fromJust)
 
 import Data.Text (unpack, pack)
@@ -17,8 +17,11 @@ import Control.Lens
 
 import qualified Data.Text.Prettyprint.Doc.Render.Text
 import Data.Text.Prettyprint.Doc.Render.Text
+import qualified Data.Map.Strict as M
+
 
 import Control.Monad.State
+import Debug.Trace
 
 main :: IO ()
 main = do
@@ -29,8 +32,10 @@ main = do
       case head $ elab (fromJust res) of
         (Nothing, st) -> mapM_  (putStrLn . unpack) (getMsgs st)
         (Just t, st) -> do
-          putDoc $ verilog t
-          withFile "out.sv" WriteMode (flip hPutDoc (verilog t))
+          --putDoc $ verilog t
+          --withFile "out.sv" WriteMode (flip hPutDoc (verilog t))
+          traceM (show . length . M.keys . getInstCache $ st)
+          putStrLn "success"
           mapM_ (putStrLn . unpack)  (getMsgs st)
       return ()
 

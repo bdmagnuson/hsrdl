@@ -6,9 +6,10 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Elab (
+module Elab2 (
      elab
    , getMsgs
+   , getInstCache
    ) where
 
 import Control.Monad.Identity
@@ -35,17 +36,19 @@ import qualified Data.Text as T
 import Data.Text (Text)
 
 import Text.Show.Deriving
+import Data.Eq.Deriving
 
 $(makePrisms ''PropRHS)
 $(makePrisms ''Fix)
 $(makeLenses ''ElabF)
 $(deriveShow1 ''ElabF)
+$(deriveEq1 ''ElabF)
 
 type instance IxValue (Fix ElabF) = Fix ElabF
 type instance Index (Fix ElabF) = Text
 
 instance Ixed (Fix ElabF) where
-    ix k f m = case break (\x -> unfix x ^. Elab.name == k) (unfix m ^. inst) of
+    ix k f m = case break (\x -> unfix x ^. Elab2.name == k) (unfix m ^. inst) of
                 (_, []) -> pure m
                 (i, l:ls) -> f l <&> \x -> Fix $ unfix m & inst .~ (i ++ (x:ls))
 
@@ -58,13 +61,15 @@ data Msgs = Msgs {
 $(makeLenses ''Msgs)
 
 data ElabState = ElabState {
-    _msgs     :: Msgs,
-    _addr     :: Integer,
-    _usedbits :: S.Set Integer,
-    _nextbit  :: Integer,
-    _baseAddr :: Integer,
-    _sprops   :: [M.Map CompType (M.Map Text Property)]
+    _msgs       :: Msgs,
+    _addr       :: Integer,
+    _usedbits   :: S.Set Integer,
+    _baseAddr   :: Integer,
+    _nextbit    :: Integer,
+    _instCache  :: ST.SymTab (Fix ElabF),
+    _sprops     :: [M.Map CompType (M.Map Text Property)]
 } deriving (Show)
+
 
 $(makeLenses ''ElabState)
 
@@ -78,8 +83,11 @@ data ReaderEnv = ReaderEnv {
 
 makeLenses ''ReaderEnv
 
+getInstCache st = st ^. instCache
 logMsg t pos m = lift $ (msgs . t) %= (((T.pack . sourcePosPretty) pos <> " - " <> m):)
 getMsgs x = reverse $ (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
+
+setProp n p e = e & props %~ assignProp n p
 
 assignBits :: SourcePos -> Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 assignBits pos _ Nothing = return Nothing
@@ -96,13 +104,14 @@ assignBits pos (Just arr) (Just (Fix reg)) = do
         then do
             lift (nextbit .= l + 1)
             lift (usedbits .= union)
-            ereturn $ (reg & lsb .~ r) & (msb .~ l) & (props %~ assignProp "fieldwidth" (PropNum (l - r + 1)))
+            ereturn $ (setProp "lsb" (PropNum r)) . (setProp "msb" (PropNum l)) $ reg
         else do
             logMsg err pos ("Field overlap on bits " <> (T.pack . show . S.toList) intersection)
             return Nothing
     where
         range x y = if x < y then [x..y] else [y..x]
 
+resetBits :: ReaderT ReaderEnv ElabS ()
 resetBits = do
     lift (nextbit .= 0)
     lift (usedbits .= S.empty)
@@ -114,64 +123,115 @@ roundMod x m =
     (c, _) -> (c + 1) * m
 
 
+pushDefs :: ReaderT ReaderEnv ElabS ()
 pushDefs = lift (sprops %= \a@(x:xs) -> x:a)
+
+popDefs :: ReaderT ReaderEnv ElabS ()
 popDefs  = lift (sprops %= \(x:xs) -> xs)
 modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= Just rhs)) [Signal, Field, Reg, Regfile, Addrmap]
 
-instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
-instantiate (pos :< CompInst iext d n arr align@(Alignment at' mod stride)) = do
-    env <- ask
-    sp <- lift (use sprops)
-    case ST.lkup (env ^. syms) (env ^. scope) d of
-        Nothing -> do
-            logMsg err pos ("Lookup failure: " <> d <> " in " <> mconcat (env ^. scope))
-            return Nothing
-        Just (sc, _ :< def) ->
-          case (ctype def, arr) of
-            (Field, _)      -> foo newinst >>= assignBits pos arr
-            (_, Just (ArrWidth w)) -> do b <- elmAddr 1
-                                         x <- myMapM (\x -> instantiate (pos :< CompInst isext d ((T.pack . show) x) Nothing (arrAlign b x))) [0..(w-1)]
-                                         case x of
-                                           Nothing -> return Nothing
-                                           Just ff -> ereturn $ ElabF Array n M.empty (fromMaybe False isext) ff 0 0 []
-                                         where arrAlign b x = Alignment ((\y -> b + x * y) <$> stride) Nothing Nothing
-                                               myMapM f = runMaybeT . mapM (MaybeT . f)
+-- maybeMapM f = runMaybeT . mapM (MaybeT . f)
+--
 
-            (Reg, Nothing) -> (foo newinst >>= assignAddress) <* resetBits
-            otherwise -> setBaseAddress *> foo newinst
-         where
-           isext = msum [env ^. rext, iext, Types.ext def]
-           foo x   = withReaderT newenv  $ pushDefs *> foldl (>>=) x (map elaborate (expr def)) <* popDefs
-                     where newenv = (scope .~ (sc ++ [d])) . (rext .~ isext)
-           newinst =
-             ereturn ElabF
-               { _etype = ctype def
-               , _name  = n
-               , _props = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
-               , _inst  = []
-               , _ext   = fromMaybe False isext
-               , _lsb   = 0
-               , _msb   = 0
+getNumProp :: Text -> Fix ElabF -> Integer
+getNumProp k e =
+   case e ^? _Fix . props . ix k of
+      Just (Just (PropNum n)) -> n
+      Just _ -> error $ T.unpack (k <> " is not a numeric property")
+      Nothing -> error $ T.unpack (k <> " is not a valid property")
+
+getSize x =
+ case x ^. _Fix . etype of
+   Field -> roundMod (getNumProp "fieldwidth" x)  8
+   Reg   -> roundMod (getNumProp "regwidth" x) 8
+   otherwise -> case x ^. _Fix . inst of
+                  [] -> 0
+                  (y:_) -> y ^. _Fix . offset
+
+getAlign (Alignment x y z) = (x, y, z)
+
+calcOffsets :: Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
+calcOffsets Nothing = return Nothing
+calcOffsets (Just x) = do
+   lift (baseAddr .= 0)
+   newInst <- mapM setOffset (x ^. _Fix . inst)
+   return $ Just $ x & _Fix . inst .~ newInst
+
+setOffset :: Fix ElabF -> ReaderT ReaderEnv ElabS (Fix ElabF)
+setOffset  x = do
+  ba <- lift (use baseAddr)
+  let b = case (at', mod) of
+           (Just a, _) -> a
+           (Nothing, Just a) -> roundMod ba a
+           (Nothing, Nothing) -> ba
+
+  let x'  = x & _Fix . offset .~ b
+  let x'' = if (x ^. _Fix . etype == Array)
+            then x' & _Fix . inst %~ imap (\i x -> x & _Fix . offset .~ b + arrStride * (fromIntegral i))
+            else x'
+
+  when   (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + arrStride * (fromIntegral . length $ x ^.  _Fix . inst))
+  unless (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + getSize x)
+  return x''
+  where arrStride = case stride of
+                       Nothing -> getSize (fromJust (x ^? _Fix . inst . ix 0))
+                       Just a -> a
+        (at', mod, stride) = getAlign (x ^. _Fix . ealign)
+
+instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
+instantiate (pos :< CompInst iext d n arr align) = do
+  env   <- ask
+  cache <- lift (use instCache)
+  case ST.lkup cache (env ^. scope) d of
+    Nothing -> case ST.lkup (env ^. syms) (env ^. scope) d of
+                 Nothing -> do
+                             logMsg err pos ("Unknown definition: " <> d <> " in " <> mconcat (env ^. scope))
+                             return Nothing
+                 --Just def -> elabInst def <* (\x -> (lift instCache %= ST.add (env ^. scope) n x))
+                 Just def -> elabInst def >>= addCache (env ^. scope)
+    Just (_, a) -> return (Just a)
+
+  where
+   addCache s (Just i) = do
+      lift $ instCache %= ST.add s n i
+      return (Just i)
+
+   elabInst (sc, _ :< def) = do
+     pushDefs
+     when (ctype def == Reg) resetBits
+     inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def)) >>= arrInst >>= calcOffsets
+     popDefs
+     return inst
+     where arrInst (Just x) =
+             case (ctype def, arr) of
+               (Field, _) -> assignBits pos arr (Just x)
+               (_, Just (ArrWidth w)) ->
+                  let newinst = x & _Fix . ealign .~ (Alignment Nothing Nothing Nothing)
+                  in ereturn $ ElabF
+                    { _etype = Array
+                    , _name  = n
+                    , _props = M.empty
+                    , _postProps = []
+                    , _inst = zipWith (\x y -> y & _Fix . Elab2.name .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
+                    , _ealign = align
+                    , _offset = 0
+                    }
+
+               otherwise -> return (Just x)
+           arrInst Nothing = return Nothing
+           newenv = (scope .~ (sc ++ [d]))-- . (rext .~ isext)
+           initInst = do
+             sp <- lift (use sprops)
+             ereturn $ ElabF
+               { _etype     = ctype def
+               , _name      = n
+               , _props     = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
                , _postProps = []
+               , _inst      = []
+               , _ealign     = align
+               , _offset    = 0
                }
-           elmAddr rw = do
-             curAddr <- lift (use addr)
-             baseAddr <- lift (use baseAddr)
-             let b = case (at', mod, stride) of
-                      (Just a, _, _) -> baseAddr + a
-                      (Nothing, Just a, _) -> roundMod curAddr a
-                      (Nothing, Nothing,  _) -> roundMod curAddr rw
-             lift (addr .= b)
-             return b
-           assignAddress e = do
-             let rw = fromJust (e ^? _Just . _Fix . props . ix "regwidth" . _Just . _PropNum) `div` 8
-             a <- elmAddr rw
-             lift (addr .= a + rw)
-             return $ e & _Just . _Fix . props %~ assignProp "address" (PropNum a)
-           setBaseAddress = do
-             b <- lift (use addr)
-             lift (baseAddr .= b)
-             return ()
+
 
 elaborate _ Nothing = return Nothing
 elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
@@ -269,10 +329,11 @@ elab (ti, syms) =
   map f ti
     where
         env = ReaderEnv {_scope = [""], _syms = syms, _rext = Nothing}
-        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs]}
+        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs], _instCache = M.empty}
         f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
-            where pos = extract $ getDef syms [""] x ^. _2
 
+            where pos = extract $ getDef syms [""] x ^. _2
+                  
 ereturn = return . Just . Fix
 
 

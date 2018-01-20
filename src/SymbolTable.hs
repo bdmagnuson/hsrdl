@@ -17,7 +17,7 @@ import Data.Text (Text)
 type Scope = [Text]
 type SymTab a = M.Map Text (M.Map Text a)
 
-add t s n d  = t & at sc . non M.empty . at n ?~ d
+add s n d t = t & at sc . non M.empty . at n ?~ d
     where sc = T.intercalate "," s
 
 lkup :: Eq a => SymTab a -> Scope -> Text -> Maybe (Scope, a)
