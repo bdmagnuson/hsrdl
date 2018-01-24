@@ -104,7 +104,7 @@ assignBits pos (Just arr) (Just (Fix reg)) = do
         then do
             lift (nextbit .= l + 1)
             lift (usedbits .= union)
-            ereturn $ (setProp "lsb" (PropNum r)) . (setProp "msb" (PropNum l)) $ reg
+            (return . Just . Fix) $ (setProp "lsb" (PropNum r)) . (setProp "msb" (PropNum l)) $ reg
         else do
             logMsg err pos ("Field overlap on bits " <> (T.pack . show . S.toList) intersection)
             return Nothing
@@ -142,8 +142,8 @@ getNumProp k e =
 
 getSize x =
  case x ^. _Fix . etype of
-   Field -> roundMod (getNumProp "fieldwidth" x)  8
-   Reg   -> roundMod (getNumProp "regwidth" x) 8
+   Field -> 0
+   Reg   -> (getNumProp "regwidth" x) `div` 8
    otherwise -> case x ^. _Fix . inst of
                   [] -> 0
                   (y:_) -> y ^. _Fix . offset
@@ -187,42 +187,34 @@ instantiate (pos :< CompInst iext d n arr align) = do
                  Nothing -> do
                              logMsg err pos ("Unknown definition: " <> d <> " in " <> mconcat (env ^. scope))
                              return Nothing
-                 --Just def -> elabInst def <* (\x -> (lift instCache %= ST.add (env ^. scope) n x))
-                 Just def -> elabInst def >>= addCache (env ^. scope)
-    Just (_, a) -> return (Just a)
+                 Just  def -> elabInst def >>= calcOffsets >>= addCache (env ^. scope) >>= arrInst
+    Just (_, a) -> return (Just a) >>= arrInst >>= calcOffsets
 
   where
    addCache s (Just i) = do
       lift $ instCache %= ST.add s n i
       return (Just i)
 
+   arrInst (Just x) =
+     case (x ^. _Fix . etype, arr) of
+       (Field, _) -> assignBits pos arr (Just x)
+       (_, Just (ArrWidth w)) ->
+          let newinst = x & _Fix . ealign .~ (Alignment Nothing Nothing Nothing)
+          in return $ Just $ x & _Fix . etype  .~ Array
+                               & _Fix . inst   .~ zipWith (\x y -> y & _Fix . Elab2.name .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
+       otherwise -> return (Just x)
+   arrInst Nothing = return Nothing
+
    elabInst (sc, _ :< def) = do
      pushDefs
      when (ctype def == Reg) resetBits
-     inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def)) >>= arrInst >>= calcOffsets
+     inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def))
      popDefs
      return inst
-     where arrInst (Just x) =
-             case (ctype def, arr) of
-               (Field, _) -> assignBits pos arr (Just x)
-               (_, Just (ArrWidth w)) ->
-                  let newinst = x & _Fix . ealign .~ (Alignment Nothing Nothing Nothing)
-                  in ereturn $ ElabF
-                    { _etype = Array
-                    , _name  = n
-                    , _props = M.empty
-                    , _postProps = []
-                    , _inst = zipWith (\x y -> y & _Fix . Elab2.name .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
-                    , _ealign = align
-                    , _offset = 0
-                    }
-
-               otherwise -> return (Just x)
-           arrInst Nothing = return Nothing
-           newenv = (scope .~ (sc ++ [d]))-- . (rext .~ isext)
+     where newenv = (scope .~ (sc ++ [d]))-- . (rext .~ isext)
            initInst = do
              sp <- lift (use sprops)
-             ereturn $ ElabF
+             (return . Just . Fix) $ ElabF
                { _etype     = ctype def
                , _name      = n
                , _props     = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
@@ -230,6 +222,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
                , _inst      = []
                , _ealign     = align
                , _offset    = 0
+               , _escope   = sc ++ [d]
                }
 
 
@@ -333,7 +326,6 @@ elab (ti, syms) =
         f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
 
             where pos = extract $ getDef syms [""] x ^. _2
-                  
-ereturn = return . Just . Fix
+
 
 

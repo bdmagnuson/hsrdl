@@ -110,7 +110,7 @@ parseCompName = do
     parseIdentifier <|> do
       idx <- lift get
       lift (modify (\s -> s {anonIdx = anonIdx s + 1}))
-      return $ "__anon_def" <> (T.pack . show) (anonIdx idx)
+      return $ "_ad" <> (T.pack . show) (anonIdx idx)
 
 addTopDef c name = do
     env <- ask

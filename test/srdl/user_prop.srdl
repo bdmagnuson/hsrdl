@@ -8,7 +8,7 @@ addrmap test {
 
    reg { field {} a;} gg;
 
-   reg {
+   reg realdef {
       default intr;
       regwidth = 32;
       default hw = "rw";
@@ -16,6 +16,8 @@ addrmap test {
       field {reset = 4;} d[2];
       field {} c[7:6];
    } bbb[4] @64;
+
+   realdef moreinst;
 
    reg {
       field {} f1;

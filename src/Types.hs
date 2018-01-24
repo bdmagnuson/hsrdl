@@ -157,8 +157,9 @@ data ElabF a = ElabF {
     _props     :: M.Map Text (Maybe PropRHS),
     _postProps :: [([PathElem], Text, PropRHS)],
     _inst      :: [a],
-    _ealign     :: Alignment,
-    _offset    :: Integer
+    _ealign    :: Alignment,
+    _offset    :: Integer,
+    _escope    :: [Text]
 } deriving (Show, Functor)
 
 
