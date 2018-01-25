@@ -18,6 +18,23 @@ module Types (
  , pdefault
  , IsSticky (..)
  , IntrType (..)
+ , _Fix
+ , etype
+ , ename
+ , eprops
+ , epostProps
+ , einst
+ , ealign
+ , eoffset
+ , escope
+ , estride
+ , _PropLit
+ , _PropNum
+ , _PropBool
+ , _PropRef
+ , _PropPath
+ , _PropIntr
+ , _PropEnum
  ) where
 
 import Control.Comonad.Cofree
@@ -25,9 +42,13 @@ import qualified Data.Map.Strict as M
 import Control.Lens
 import Control.Monad.State
 import Control.Applicative
+import Data.Functor.Foldable
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Text (Text)
+
+import Text.Show.Deriving
+import Data.Eq.Deriving
 
 type Identifier = Text
 type ElemPath = [(Identifier, Maybe Array)]
@@ -149,18 +170,20 @@ makeLenses ''Property
 
 type PropDefs = M.Map CompType (M.Map Identifier Property)
 
-
-
 data ElabF a = ElabF {
-    _etype     :: CompType,
-    _name      :: Text,
-    _props     :: M.Map Text (Maybe PropRHS),
-    _postProps :: [([PathElem], Text, PropRHS)],
-    _inst      :: [a],
-    _ealign    :: Alignment,
-    _offset    :: Integer,
-    _escope    :: [Text]
+    _etype      :: CompType,
+    _ename      :: Text,
+    _eprops     :: M.Map Text (Maybe PropRHS),
+    _epostProps :: [([PathElem], Text, PropRHS)],
+    _einst      :: [a],
+    _ealign     :: Alignment,
+    _eoffset    :: Integer,
+    _escope     :: [Text],
+    _estride    :: Integer
 } deriving (Show, Functor)
 
-
-
+$(makePrisms ''Fix)
+$(makePrisms ''PropRHS)
+$(makeLenses ''ElabF)
+$(deriveShow1 ''ElabF)
+$(deriveEq1 ''ElabF)

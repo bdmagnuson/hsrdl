@@ -12,16 +12,22 @@ module Props (
      , isPropSet
      , exMap
      , assignProp
+     , getNumProp
+     , getBoolProp
+     , getEnumProp
      ) where
 
 import qualified Data.Map.Strict as M
 import Control.Lens
 import Data.List (delete)
 
+import Data.Functor.Foldable
 import qualified Data.Text as T
 import Data.Text (Text)
+import Data.Monoid ((<>))
 
 import Types
+
 
 typeOf :: PropRHS -> PropType
 typeOf (PropNum  _)    = PropNumT
@@ -55,9 +61,12 @@ p_sw            = ("sw",            defEnum "rw")
 p_name          = ("name",          defNothing PropLitT)
 p_desc          = ("desc",          defNothing PropLitT)
 p_reset         = ("reset",         defNum 0)
+p_fieldwidth    = ("fieldwidth",    defNum 0)
 p_counter       = ("counter",       defFalse)
 p_rclr          = ("rclr",          defFalse)
+p_wclr          = ("wclr",          defFalse)
 p_rset          = ("rset",          defFalse)
+p_wset          = ("wset",          defFalse)
 p_hwclr         = ("hwclr",         defFalse)
 p_woclr         = ("woclr",         defFalse)
 p_nonsticky     = ("nonsticky",     defFalse)
@@ -97,11 +106,14 @@ defDefs = M.fromList [
                         , p_hw
                         , p_sw
                         , p_name
+                        , p_fieldwidth
                         , p_desc
                         , p_reset
                         , p_counter
                         , p_rclr
                         , p_rset
+                        , p_wclr
+                        , p_wset
                         , p_hwclr
                         , p_woclr
                         , p_woset
@@ -159,3 +171,25 @@ exMap = foldl M.union M.empty (map f exSets)
           , ["async", "sync"]
           , ["dontcompare", "dontest"]
           , ["level", "negedge", "posedge", "bothedge"]]
+
+getNumProp :: Text -> Fix ElabF -> Integer
+getNumProp k e =
+   case e ^? _Fix . eprops . ix k of
+      Just (Just (PropNum n)) -> n
+      Just _ -> error $ T.unpack (k <> " is not a numeric property")
+      Nothing -> error $ T.unpack (k <> " is not a valid property")
+
+getBoolProp :: Text -> Fix ElabF -> Bool
+getBoolProp k e =
+   case e ^? _Fix . eprops . ix k of
+      Just (Just (PropBool n)) -> n
+      Just _ -> error $ T.unpack (k <> " is not a boolean property")
+      Nothing -> error $ T.unpack (k <> " is not a valid property")
+
+
+getEnumProp :: Text -> Fix ElabF -> Text
+getEnumProp k e =
+   case e ^? _Fix . eprops . ix k of
+      Just (Just (PropEnum n)) -> n
+      Just _ -> error $ T.unpack (k <> " is not a boolean property")
+      Nothing -> error $ T.unpack (k <> " is not a valid property")

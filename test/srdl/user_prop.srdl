@@ -14,7 +14,7 @@ addrmap test {
       default hw = "rw";
       field {intr;} a[2];
       field {reset = 4;} d[2];
-      field {} c[7:6];
+      field {rclr;} c[7:6];
    } bbb[4] @64;
 
    realdef moreinst;

@@ -35,22 +35,13 @@ import Types
 import qualified Data.Text as T
 import Data.Text (Text)
 
-import Text.Show.Deriving
-import Data.Eq.Deriving
-
-$(makePrisms ''PropRHS)
-$(makePrisms ''Fix)
-$(makeLenses ''ElabF)
-$(deriveShow1 ''ElabF)
-$(deriveEq1 ''ElabF)
-
 type instance IxValue (Fix ElabF) = Fix ElabF
 type instance Index (Fix ElabF) = Text
 
 instance Ixed (Fix ElabF) where
-    ix k f m = case break (\x -> unfix x ^. Elab2.name == k) (unfix m ^. inst) of
+    ix k f m = case break (\x -> unfix x ^. ename == k) (unfix m ^. einst) of
                 (_, []) -> pure m
-                (i, l:ls) -> f l <&> \x -> Fix $ unfix m & inst .~ (i ++ (x:ls))
+                (i, l:ls) -> f l <&> \x -> Fix $ unfix m & einst .~ (i ++ (x:ls))
 
 data Msgs = Msgs {
     _info  :: [Text],
@@ -87,7 +78,7 @@ getInstCache st = st ^. instCache
 logMsg t pos m = lift $ (msgs . t) %= (((T.pack . sourcePosPretty) pos <> " - " <> m):)
 getMsgs x = reverse $ (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
 
-setProp n p e = e & props %~ assignProp n p
+setProp n p e = e & eprops %~ assignProp n p
 
 assignBits :: SourcePos -> Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 assignBits pos _ Nothing = return Nothing
@@ -104,7 +95,9 @@ assignBits pos (Just arr) (Just (Fix reg)) = do
         then do
             lift (nextbit .= l + 1)
             lift (usedbits .= union)
-            (return . Just . Fix) $ (setProp "lsb" (PropNum r)) . (setProp "msb" (PropNum l)) $ reg
+            (return . Just . Fix) $ (setProp "lsb" (PropNum r)) .
+                                    (setProp "msb" (PropNum l)) .
+                                    (setProp "fieldwidth" (PropNum (l - r + 1))) $ reg
         else do
             logMsg err pos ("Field overlap on bits " <> (T.pack . show . S.toList) intersection)
             return Nothing
@@ -133,20 +126,14 @@ modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefau
 -- maybeMapM f = runMaybeT . mapM (MaybeT . f)
 --
 
-getNumProp :: Text -> Fix ElabF -> Integer
-getNumProp k e =
-   case e ^? _Fix . props . ix k of
-      Just (Just (PropNum n)) -> n
-      Just _ -> error $ T.unpack (k <> " is not a numeric property")
-      Nothing -> error $ T.unpack (k <> " is not a valid property")
 
 getSize x =
  case x ^. _Fix . etype of
    Field -> 0
    Reg   -> (getNumProp "regwidth" x) `div` 8
-   otherwise -> case x ^. _Fix . inst of
-                  [] -> 0
-                  (y:_) -> y ^. _Fix . offset
+   otherwise -> case maximumByOf traverse (\x y -> compare (x ^. _Fix . eoffset) (y ^. _Fix . eoffset)) (x ^. _Fix . einst) of
+                  Nothing -> 0
+                  Just e -> e ^. _Fix . eoffset + (getSize e)
 
 getAlign (Alignment x y z) = (x, y, z)
 
@@ -154,8 +141,8 @@ calcOffsets :: Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 calcOffsets Nothing = return Nothing
 calcOffsets (Just x) = do
    lift (baseAddr .= 0)
-   newInst <- mapM setOffset (x ^. _Fix . inst)
-   return $ Just $ x & _Fix . inst .~ newInst
+   newInst <- mapM setOffset (x ^. _Fix . einst)
+   return $ Just $ x & _Fix . einst .~ newInst
 
 setOffset :: Fix ElabF -> ReaderT ReaderEnv ElabS (Fix ElabF)
 setOffset  x = do
@@ -165,16 +152,17 @@ setOffset  x = do
            (Nothing, Just a) -> roundMod ba a
            (Nothing, Nothing) -> ba
 
-  let x'  = x & _Fix . offset .~ b
+  let x'  = x & _Fix . eoffset .~ b
   let x'' = if (x ^. _Fix . etype == Array)
-            then x' & _Fix . inst %~ imap (\i x -> x & _Fix . offset .~ b + arrStride * (fromIntegral i))
+            then x' & _Fix . estride .~ arrStride
+                    & _Fix . einst %~ imap (\i x -> x & _Fix . eoffset .~ b + arrStride * (fromIntegral i))
             else x'
 
-  when   (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + arrStride * (fromIntegral . length $ x ^.  _Fix . inst))
+  when   (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + arrStride * (fromIntegral . length $ x ^.  _Fix . einst))
   unless (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + getSize x)
   return x''
   where arrStride = case stride of
-                       Nothing -> getSize (fromJust (x ^? _Fix . inst . ix 0))
+                       Nothing -> getSize (fromJust (x ^? _Fix . einst . ix 0))
                        Just a -> a
         (at', mod, stride) = getAlign (x ^. _Fix . ealign)
 
@@ -201,7 +189,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
        (_, Just (ArrWidth w)) ->
           let newinst = x & _Fix . ealign .~ (Alignment Nothing Nothing Nothing)
           in return $ Just $ x & _Fix . etype  .~ Array
-                               & _Fix . inst   .~ zipWith (\x y -> y & _Fix . Elab2.name .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
+                               & _Fix . einst  .~ zipWith (\x y -> y & _Fix . ename .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
        otherwise -> return (Just x)
    arrInst Nothing = return Nothing
 
@@ -215,14 +203,15 @@ instantiate (pos :< CompInst iext d n arr align) = do
            initInst = do
              sp <- lift (use sprops)
              (return . Just . Fix) $ ElabF
-               { _etype     = ctype def
-               , _name      = n
-               , _props     = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
-               , _postProps = []
-               , _inst      = []
+               { _etype      = ctype def
+               , _ename      = n
+               , _eprops     = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
+               , _epostProps = []
+               , _einst      = []
                , _ealign     = align
-               , _offset    = 0
-               , _escope   = sc ++ [d]
+               , _eoffset    = 0
+               , _escope     = sc ++ [d]
+               , _estride    = 0
                }
 
 
@@ -237,19 +226,19 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
           new <- instantiate ins
           case new of
             Nothing -> return Nothing
-            Just a -> (return . Just) (i & _Fix . inst %~ (++ [a]))
+            Just a -> (return . Just) (i & _Fix . einst %~ (++ [a]))
 
 
 elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
    legal <- checkAssign pos (e ^? _Fix) prop rhs
    case legal of
-     Just () -> foldl (>>=) ((return . Just) $ e &  _Fix . props %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
+     Just () -> foldl (>>=) ((return . Just) $ e &  _Fix . eprops %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
      Nothing -> return Nothing
    where
      cExclusive p Nothing = return Nothing
-     cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . props . ix p)
+     cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . eprops . ix p)
                       then do logMsg warn pos ("Property " <> prop <> " is mutually exlusive with " <> p <> ".  Unsetting " <> p <> ".")
-                              return $ e & _Just . _Fix . props . ix p .~ Nothing
+                              return $ e & _Just . _Fix . eprops . ix p .~ Nothing
                       else return e
 
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
@@ -260,7 +249,7 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
     Right l -> do
       legal <- checkAssign pos (e ^? runTraversal l . _Fix) prop rhs
       case legal of
-        Just () -> (return . Just) $ e & _Fix . postProps %~ (++ [(path, prop, rhs)])
+        Just () -> (return . Just) $ e & _Fix . epostProps %~ (++ [(path, prop, rhs)])
         Nothing -> return Nothing
       where
   where t = buildPropTraversal e (concatMap buildPath path)
@@ -277,6 +266,15 @@ elaborate (pos :< PropDefault prop rhs) (Just e) = do
     Just () -> do
       modifyDefs prop rhs
       (return . Just) e
+  where
+    checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= cType pos prop rhs
+    cExistAny = do
+      sp <- lift (use sprops)
+      case msum $ map (\x -> sp ^? ix 0 . ix x . ix prop) [Signal, Field, Reg, Regfile, Addrmap] of
+        Nothing -> do
+          logMsg err pos ("Property " <> prop <> " not defined for any component")
+          return Nothing
+        Just p -> return (Just p)
 
 checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
   where
@@ -288,15 +286,6 @@ checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
           return Nothing
         Just p -> return (Just p)
 
-checkDefaultAssign pos (Just elm) prop rhs = cExistAny >>= cType pos prop rhs
-  where
-    cExistAny = do
-      sp <- lift (use sprops)
-      case msum $ map (\x -> sp ^? ix 0 . ix x . ix prop) [Signal, Field, Reg, Regfile, Addrmap] of
-        Nothing -> do
-          logMsg err pos ("Property " <> prop <> " not defined for any component")
-          return Nothing
-        Just p -> return (Just p)
 
 cType pos prop rhs (Just x) =
   case checktype (x ^. ptype) rhs of

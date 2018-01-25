@@ -6,7 +6,6 @@ import Debug.Trace
 
 import Parser
 import Elab2
---import Backends.Verilog
 import Backends.UVM
 import Data.Maybe (fromJust)
 
