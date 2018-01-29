@@ -18,6 +18,8 @@ module Types (
  , pdefault
  , IsSticky (..)
  , IntrType (..)
+ , AccessType (..)
+ , AccessBehavior (..)
  , _Fix
  , etype
  , ename
@@ -28,6 +30,7 @@ module Types (
  , eoffset
  , escope
  , estride
+ , eext
  , _PropLit
  , _PropNum
  , _PropBool
@@ -149,7 +152,7 @@ instance Show PropType where
   show PropIntrT = "intr"
   show PropEnumT = "Enumeration"
 
-data IsSticky = Sticky | NonSticky deriving (Show, Eq)
+data IsSticky = Sticky | StickyBit | NonSticky deriving (Show, Eq)
 data IntrType = NonIntr | Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
 
 data PropRHS =
@@ -179,7 +182,8 @@ data ElabF a = ElabF {
     _ealign     :: Alignment,
     _eoffset    :: Integer,
     _escope     :: [Text],
-    _estride    :: Integer
+    _estride    :: Integer,
+    _eext       :: Bool
 } deriving (Show, Functor)
 
 $(makePrisms ''Fix)
@@ -187,3 +191,37 @@ $(makePrisms ''PropRHS)
 $(makeLenses ''ElabF)
 $(deriveShow1 ''ElabF)
 $(deriveEq1 ''ElabF)
+
+data AccessType
+  = RO     --W: no effect, R: no effect
+  | RW     --W: as-is, R: no effect
+  | RC     --W: no effect, R: clears all bits
+  | RS     --W: no effect, R: sets all bits
+  | WRC    --W: as-is, R: clears all bits
+  | WRS    --W: as-is, R: sets all bits
+  | WS     --W: clears all bits, R: no effect
+  | WC     --W: sets all bits, R: no effect
+  | WSRC   --W: sets all bits, R: clears all bits
+  | WCRS   --W: clears all bits, R: sets all bits
+  | W1C    --W: 1/0 clears/no effect on matching bit, R: no effect
+  | W1S    --W: 1/0 sets/no effect on matching bit, R: no effect
+  | W0C    --W: 1/0 no effect on/clears matching bit, R: no effect
+  | W0S    --W: 1/0 no effect on/sets matching bit, R: no effect
+  | W1SRC  --W: 1/0 sets/no effect on matching bit, R: clears all bits
+  | W1CRS  --W: 1/0 clears/no effect on matching bit, R: sets all bits
+  | W0SRC  --W: 1/0 no effect on/sets matching bit, R: clears all bits
+  | W0CRS  --W: 1/0 no effect on/clears matching bit, R: sets all bits
+  | WO     --W: as-is, R: error
+  | WOC    --W: clears all bits, R: error
+  | WOS deriving (Show, Eq)    --W: sets all bits, R: error
+
+data AccessBehavior
+ = Disallowed
+ | Normal
+ | Set
+ | Clear
+ | OneSet
+ | OneClear
+ | ZeroSet
+ | ZeroClear deriving (Show, Eq)
+

@@ -7,6 +7,7 @@ import Debug.Trace
 import Parser
 import Elab2
 import Backends.UVM
+import Backends.Verilog
 import Data.Maybe (fromJust)
 
 import Data.Text (unpack, pack)
@@ -32,9 +33,9 @@ main = do
       case head $ elab (fromJust res) of
         (Nothing, st) -> mapM_  (putStrLn . unpack) (getMsgs st)
         (Just t, st) -> do
-          --putDoc $ verilog t
-          --withFile "out.sv" WriteMode (flip hPutDoc (verilog t)e
-          (mapM_ . mapM_) (putStrLn . unpack) $ (generateUVM . getInstCache $ st)
+          putDoc $ verilog t
+          withFile "out.sv" WriteMode (flip hPutDoc (verilog t))
+          --(mapM_ . mapM_) (putStrLn . unpack) $ (generateUVM . getInstCache $ st)
           putStrLn "success"
           mapM_ (putStrLn . unpack)  (getMsgs st)
       return ()

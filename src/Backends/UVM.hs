@@ -36,7 +36,7 @@ baseClass inst =
       Array   -> "array"
       _       -> error $ show  (inst ^. _Fix . etype)
 
-delim = foldl1 (\x y -> x <> ("_" :: Text) <> y)
+delim = foldl1 (\x y -> x <> ("_" :: Text) <> y) . tail
 sname i = pretty $ delim (i ^. _Fix . escope)
 
 pt :: Text -> P.Doc ann
@@ -58,18 +58,6 @@ printDecl i =
    where c = sname i
          n = pretty $ (i ^. _Fix . ename)
 
-
-data AccessBehavior
- = Disallowed
- | Normal
- | Set
- | Clear
- | OneSet
- | OneClear
- | ZeroSet
- | ZeroClear
-
-
 printNew Reg r = P.vcat [P.hang 3 (P.vcat [proto, body]), end]
    where proto = pt "function new(input string name = " <> P.dquotes (sname r) <> pt ");"
          body  = pt "super.new(name," <+> (pretty $ getNumProp "regwidth" r) <> pt ", UVM_NO_COVERAGE);"
@@ -82,58 +70,24 @@ printNew _ r = P.vcat [P.hang 3 (P.vcat [proto, body]), end]
 
 
 printBuild Reg r = P.vcat [P.hang 3 (P.vcat [proto, create, config]), end]
-   where proto = pretty ("virtual function void build();" :: Text)
-         end = pretty ("endfunction" :: Text)
-         create = P.vcat $ map (\f -> pretty (f ^. _Fix . ename) <+> pretty ("= new();" :: Text)) (r ^. _Fix . einst)
+   where proto = pt "virtual function void build();"
+         end = pt "endfunction"
+         create = P.vcat $ map (\f -> pretty (f ^. _Fix . ename) <+> pt "= new();") (r ^. _Fix . einst)
          config = P.vcat $ map configline (r ^. _Fix . einst)
-         configline f = pretty (f ^. _Fix . ename) <> pretty (".configure" :: Text) <> (P.parens . P.hcat) (P.punctuate P.comma [size, lsb, access, volitile, reset, has_reset, is_rand, ind]) <> P.semi
+         configline f = pretty (f ^. _Fix . ename) <> pt ".configure" <> (P.parens . P.hcat) (P.punctuate P.comma [size, lsb, access, volitile, reset, has_reset, is_rand, ind]) <> P.semi
            where
              size = pretty $ getNumProp "fieldwidth" f
              lsb  = pretty $ getNumProp "lsb" f
              access :: P.Doc Text
-             access = P.dquotes $ pt $ case (readAccess, writeAccess) of
-                                         (Normal,     Disallowed) ->  "RO"
-                                         (Normal,     Normal)     ->  "RW"
-                                         (Clear,      Disallowed) ->  "RC"
-                                         (Set,        Disallowed) ->  "RS"
-                                         (Clear,      Normal)     ->  "WRC"
-                                         (Set,        Normal)     ->  "WRS"
-                                         (Normal,     Set)        ->  "WS"
-                                         (Normal,     Clear)      ->  "WC"
-                                         (Clear,      Set)        ->  "WSRC"
-                                         (Set,        Clear)      ->  "WCRS"
-                                         (Normal,     OneClear)   ->  "W1C"
-                                         (Normal,     OneSet)     ->  "W1S"
-                                         (Normal,     ZeroClear)  ->  "W0C"
-                                         (Normal,     ZeroSet)    ->  "W0S"
-                                         (Set,        OneClear)   ->  "W1CRS"
-                                         (Clear,      OneSet)     ->  "W1SRC"
-                                         (Set,        ZeroClear)  ->  "W0CRS"
-                                         (Clear,      ZeroSet)    ->  "W0SRC"
-                                         (Disallowed, Normal)     ->  "WO"
-                                         (Disallowed, Clear)      ->  "WOC"
-                                         _                        -> error "Unexpected RW access combination"
-             readAccess = case getEnumProp "sw" f of
-                            "w"  -> Disallowed
-                            "na" -> Disallowed
-                            _    -> fromMaybe Normal $ msum $ map (\(p, e) -> if getBoolProp p f
-                                                                               then Just e
-                                                                               else Nothing
-                                                                   ) [("rclr", Clear), ("rset", Set)]
-             writeAccess = case getEnumProp "sw" f of
-                             "r"  -> Disallowed
-                             "na" -> Disallowed
-                             _    -> fromMaybe Normal $ msum $ map (\(p, e) -> if getBoolProp p f
-                                                                               then Just e
-                                                                               else Nothing
-                                                                   ) [("wclr", Clear), ("wset", Set), ("woclr", OneClear), ("woset", OneSet)]
+
+             access = P.dquotes $ (pt . T.pack . show . calcAccess) f
              volitile = pretty $ (if hwWritable || counter then 0 else 1 :: Integer)
              hwWritable = any id [getBoolProp "counter" f, getEnumProp "hw" f == "w", getEnumProp "hw" f == "rw"]
              counter = getBoolProp "counter" f
              reset = pretty $ getNumProp "reset" f
-             has_reset = pretty ("1" :: Text)
-             is_rand = pretty ("1" :: Text)
-             ind = pretty ("0" :: Text)
+             has_reset = pt "1"
+             is_rand = pt "1"
+             ind = pt "0"
 
 printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, sAdd, aAdd]), end]
    where proto = pretty ("virtual function void build();" :: Text)
@@ -147,20 +101,23 @@ printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, sAdd, aAdd]), 
          aNew = let n x = pt (x ^. _Fix . ename)
                 in P.vcat $ map (\x -> P.hang 3 $ P.vcat ["foreach" <> P.parens (n x <> pt "[i]"), (n x) <> pt "[i]" <+> P.equals <+> pt "new();"]) array
 
-         sregAdd x = regAdd' (pt (x ^. _Fix . ename)) (pretty (x ^. _Fix . eoffset))
-         aregAdd x = let v = n x <> pt "[i]"
-                         b = x ^. _Fix . eoffset
-                         s = x ^. _Fix . estride
-                         o = pretty b <+> pt "+" <+> pretty s <+> pt "*" <+> pt "i"
-                     in P.hang 3 $ P.vcat ["foreach" <> P.parens v, regAdd' v o]
 
          regAdd' n o = pt "default_map.add_reg" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o, pt "RW"]) <> P.semi
+         blkAdd' n o = pt "default_map.add_submap" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o]) <> P.semi
 
          sAdd = P.vcat $ (map sregAdd scalarR) ++ (map aregAdd arrayR)
-         aAdd = ""
+         aAdd = P.vcat $ (map sblkAdd scalarB) ++ (map ablkAdd arrayB)
 
+         sgenAdd f x = f (pt (x ^. _Fix . ename)) (pretty (x ^. _Fix . eoffset))
+         agenAdd f x = let v = n x <> pt "[i]"
+                           b = x ^. _Fix . eoffset
+                           s = x ^. _Fix . estride
+                           o = pretty b <+> pt "+" <+> pretty s <+> pt "*" <+> pt "i"
+                       in P.hang 3 $ P.vcat ["foreach" <> P.parens v, f v o]
 
-
-
+         sregAdd x = sgenAdd regAdd' x
+         aregAdd x = agenAdd regAdd' x
+         sblkAdd x = sgenAdd blkAdd' x
+         ablkAdd x = agenAdd blkAdd' x
 
 

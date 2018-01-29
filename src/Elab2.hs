@@ -212,6 +212,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
                , _eoffset    = 0
                , _escope     = sc ++ [d]
                , _estride    = 0
+               , _eext       = False
                }
 
 

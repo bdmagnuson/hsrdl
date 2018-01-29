@@ -15,6 +15,7 @@ module Props (
      , getNumProp
      , getBoolProp
      , getEnumProp
+     , calcAccess
      ) where
 
 import qualified Data.Map.Strict as M
@@ -25,6 +26,8 @@ import Data.Functor.Foldable
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Monoid ((<>))
+import Data.Maybe (fromMaybe)
+import Control.Monad (msum)
 
 import Types
 
@@ -193,3 +196,47 @@ getEnumProp k e =
       Just (Just (PropEnum n)) -> n
       Just _ -> error $ T.unpack (k <> " is not a boolean property")
       Nothing -> error $ T.unpack (k <> " is not a valid property")
+
+calcAccess f =
+  case (readAccess, writeAccess) of
+    (Normal,     Disallowed) -> RO
+    (Normal,     Normal)     -> RW
+    (Clear,      Disallowed) -> RC
+    (Set,        Disallowed) -> RS
+    (Clear,      Normal)     -> WRC
+    (Set,        Normal)     -> WRS
+    (Normal,     Set)        -> WS
+    (Normal,     Clear)      -> WC
+    (Clear,      Set)        -> WSRC
+    (Set,        Clear)      -> WCRS
+    (Normal,     OneClear)   -> W1C
+    (Normal,     OneSet)     -> W1S
+    (Normal,     ZeroClear)  -> W0C
+    (Normal,     ZeroSet)    -> W0S
+    (Clear,      OneSet)     -> W1SRC
+    (Set,        OneClear)   -> W1CRS
+    (Clear,      ZeroSet)    -> W0SRC
+    (Set,        ZeroClear)  -> W0CRS
+    (Disallowed, Normal)     -> WO
+    (Disallowed, Clear)      -> WOC
+    (Disallowed, Set)        -> WOS
+    _                        -> error "Unexpected RW access combination"
+  where
+    readAccess = case getEnumProp "sw" f of
+                   "w"  -> Disallowed
+                   "na" -> Disallowed
+                   _    -> fromMaybe Normal $ msum $ map (\(p, e) -> if getBoolProp p f
+                                                                      then Just e
+                                                                      else Nothing
+                                                          ) [ ("rclr", Clear)
+                                                            , ("rset", Set) ]
+    writeAccess = case getEnumProp "sw" f of
+                    "r"  -> Disallowed
+                    "na" -> Disallowed
+                    _    -> fromMaybe Normal $ msum $ map (\(p, e) -> if getBoolProp p f
+                                                                      then Just e
+                                                                      else Nothing
+                                                          ) [ ("wclr", Clear)
+                                                            , ("wset", Set)
+                                                            , ("woclr", OneClear)
+                                                            , ("woset", OneSet)]
