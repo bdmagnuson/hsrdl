@@ -35,13 +35,6 @@ import Types
 import qualified Data.Text as T
 import Data.Text (Text)
 
-type instance IxValue (Fix ElabF) = Fix ElabF
-type instance Index (Fix ElabF) = Text
-
-instance Ixed (Fix ElabF) where
-    ix k f m = case break (\x -> unfix x ^. ename == k) (unfix m ^. einst) of
-                (_, []) -> pure m
-                (i, l:ls) -> f l <&> \x -> Fix $ unfix m & einst .~ (i ++ (x:ls))
 
 data Msgs = Msgs {
     _info  :: [Text],
@@ -78,12 +71,11 @@ getInstCache st = st ^. instCache
 logMsg t pos m = lift $ (msgs . t) %= (((T.pack . sourcePosPretty) pos <> " - " <> m):)
 getMsgs x = reverse $ (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
 
-setProp n p e = e & eprops %~ assignProp n p
 
 assignBits :: SourcePos -> Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
 assignBits pos _ Nothing = return Nothing
 assignBits pos Nothing r = assignBits pos (Just (ArrWidth 1)) r
-assignBits pos (Just arr) (Just (Fix reg)) = do
+assignBits pos (Just arr) (Just reg) = do
     used <- lift (use usedbits)
     nb   <- lift (use nextbit)
     let (l, r, set) = case arr of
@@ -95,9 +87,9 @@ assignBits pos (Just arr) (Just (Fix reg)) = do
         then do
             lift (nextbit .= l + 1)
             lift (usedbits .= union)
-            (return . Just . Fix) $ (setProp "lsb" (PropNum r)) .
-                                    (setProp "msb" (PropNum l)) .
-                                    (setProp "fieldwidth" (PropNum (l - r + 1))) $ reg
+            (return . Just) $ (setProp "lsb" (PropNum r)) .
+                              (setProp "msb" (PropNum l)) .
+                              (setProp "fieldwidth" (PropNum (l - r + 1))) $ reg
         else do
             logMsg err pos ("Field overlap on bits " <> (T.pack . show . S.toList) intersection)
             return Nothing
@@ -182,6 +174,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
    addCache s (Just i) = do
       lift $ instCache %= ST.add s n i
       return (Just i)
+   addCache s Nothing = return Nothing
 
    arrInst (Just x) =
      case (x ^. _Fix . etype, arr) of
@@ -237,13 +230,13 @@ elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
      Nothing -> return Nothing
    where
      cExclusive p Nothing = return Nothing
-     cExclusive p e = if isPropSet (fromJust $ e ^? _Just . _Fix . eprops . ix p)
-                      then do logMsg warn pos ("Property " <> prop <> " is mutually exlusive with " <> p <> ".  Unsetting " <> p <> ".")
+     cExclusive p e = if isPropSet (fromJust e) p
+                      then do logMsg warn pos ("Property " <> prop <> " is mutually exclusive with " <> p <> ".  Unsetting " <> p <> ".")
                               return $ e & _Just . _Fix . eprops . ix p .~ Nothing
                       else return e
 
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
-  case t of
+  case buildPropTraversal e path of
     Left elm -> do
       logMsg err pos ("invalid path, failed at " <> elm)
       return Nothing
@@ -252,10 +245,6 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
       case legal of
         Just () -> (return . Just) $ e & _Fix . epostProps %~ (++ [(path, prop, rhs)])
         Nothing -> return Nothing
-      where
-  where t = buildPropTraversal e (concatMap buildPath path)
-        buildPath (PathElem s Nothing) = [s]
-        buildPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
 
 
 elaborate d@(_ :< CompDef _ _ n _) e = return e
@@ -297,11 +286,11 @@ cType pos prop rhs (Just x) =
 cType _ _ _ Nothing = return Nothing
 
 
-buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
-  where f y x =
-         case e ^? (runTraversal x . ix y) of
-            Nothing -> Left y
-            Just _  -> Right $ Traversal $ runTraversal x . ix y
+--buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
+--  where f y x =
+--         case e ^? (runTraversal x . ix y) of
+--            Nothing -> Left y
+--            Just _  -> Right $ Traversal $ runTraversal x . ix y
 
 getDef syms scope def =
   case ST.lkup syms scope def of

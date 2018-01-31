@@ -1,0 +1,54 @@
+addrmap interupt {
+
+   reg block_int_r {
+      default hw=w;
+      default sw=rw;
+      default woclr;
+      field {
+        level intr;
+      } crc_error;
+      field {
+        level intr;
+      } len_error;
+   };
+
+   field {
+      level intr;
+   } len_error;
+
+   reg block_int_en_r {
+      name = "Example Block Interrupt Enable Register";
+      default hw=na;
+      default sw=rw;
+
+      field {
+      } crc_error;
+      field {
+      } len_error;
+   };
+
+   // End of Reg: block_int_en_r
+   reg block_halt_en_r {
+      name = "Example Block Halt Enable Register";
+      default hw=na;
+      default sw=rw;
+
+      field {
+      } crc_error; // not a fatal error do not halt
+
+      field {
+      } len_error; // not a fatal error do not halt
+   };
+
+
+   block_int_r     block_a_int; // Instance the Leaf Int Register
+   block_int_en_r  block_a_int_en; // Instance the corresponding Int
+   block_halt_en_r block_a_halt_en; // Instance the corresponding halt
+
+   block_a_int.crc_error->enable = block_a_int_en.crc_error;
+   block_a_int.len_error->enable = block_a_int_en.len_error;
+
+   block_a_int.crc_error->haltenable = block_a_halt_en.crc_error;
+   block_a_int.len_error->haltenable = block_a_halt_en.len_error;
+
+};

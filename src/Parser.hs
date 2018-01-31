@@ -212,10 +212,14 @@ parsePropAssign' = do
      Nothing -> return $ pos :< PropAssign [] prop rhs
      Just _  -> return $ pos :< PropDefault prop rhs
 
-parsePostPropAssign = do
-   pos <- getPosition
+parsePostPropRef = do
    path <- pathElem `sepBy` dot
    prop <- dref *> parseIdentifier'
+   return (path, prop)
+
+parsePostPropAssign = do
+   pos <- getPosition
+   (path, prop) <- parsePostPropRef
    equal
    rhs <- parseRHS prop
    semi
@@ -257,7 +261,7 @@ parseNumeric = lexeme L.decimal
 type Foo a = ReaderT ReaderEnv (StateT ParseState Parser) a
 
 parseRHS :: Text -> ReaderT ReaderEnv (StateT ParseState Parser) PropRHS
-parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit
+parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit <|> parseRef
    where parseLit = do
             a <- between dquote dquote (many (Text.Megaparsec.noneOf ("\"" :: [Char])))
             return $ PropLit (T.pack a)
@@ -268,10 +272,14 @@ parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> pa
             a <- rword "true" *> return True <|> rword "false" *> return False
             return $ PropBool a
          parseEnum = do
-            a <- option "" (between dquote dquote (many (noneOf ("\"" :: [Char]))))
-            case (T.pack a) `elem` (getEnumValues prop) of
+            a <- parseIdentifier'
+            case a `elem` (getEnumValues prop) of
               False -> (fail . T.unpack) $ "Legal values for " <> prop <> " are " <> (T.pack . show) (getEnumValues prop)
-              True -> return (PropEnum (T.pack a))
+              True -> return (PropEnum a)
+         parseRef = do
+            path <- pathElem `sepBy` dot
+            prop <- optional $ dref *> parseIdentifier'
+            return $ PropRef path prop
 
 rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "alias", "alignment", "all", "anded", "arbiter", "async", "bigendian",

@@ -1,6 +1,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Props (
        defDefs
      , getPropType
@@ -16,6 +18,9 @@ module Props (
      , getBoolProp
      , getEnumProp
      , calcAccess
+     , buildPropTraversal
+     , setPostProp
+     , setProp
      ) where
 
 import qualified Data.Map.Strict as M
@@ -26,10 +31,12 @@ import Data.Functor.Foldable
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Monoid ((<>))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Control.Monad (msum)
 
 import Types
+
+import Data.Maybe (fromJust)
 
 
 typeOf :: PropRHS -> PropType
@@ -49,6 +56,7 @@ assignProp k v = M.insert k (Just v)
 
 defFalse     = Property PropBoolT (Just (PropBool False))
 defNum n     = Property PropNumT (Just (PropNum n))
+defLit n     = Property PropLitT (Just (PropLit n))
 defNothing a = Property a Nothing
 defEnum d    = Property PropEnumT (Just (PropEnum d))
 defIntr      = Property PropIntrT (Just (PropIntr NonSticky NonIntr))
@@ -82,23 +90,31 @@ p_swacc         = ("swacc",         defFalse)
 p_swmod         = ("swmod",         defFalse)
 p_sharedextbus  = ("sharedextbus",  defFalse)
 p_singlepulse   = ("singlepulse",   defFalse)
-p_incrvalue     = ("incrvalue",     defNothing PropNumT)
-p_decrvalue     = ("decrvalue",     defNothing PropNumT)
 p_regwidth      = ("regwidth",      defNum 32)
 p_incrsaturate  = ("incrsaturate",  defNothing PropNumT)
 p_decrsaturate  = ("decrsaturate",  defNothing PropNumT)
 p_incrthreshold = ("incrthreshold", defNothing PropNumT)
 p_decrthreshold = ("decrthreshold", defNothing PropNumT)
+p_incr          = ("incr",          defNothing PropRefT)
+p_incrwidth     = ("incrwidth",     defNothing PropNumT)
+p_decrwidth     = ("decrwidth",     defNothing PropNumT)
+p_incrvalue     = ("incrvalue",     defNothing PropNumT)
+p_decrvalue     = ("decrvalue",     defNothing PropNumT)
+p_enable        = ("enable",        defNothing PropRefT)
+p_enablemask    = ("enablemask",    defNothing PropRefT)
+p_haltenable    = ("haltenable",    defNothing PropRefT)
+p_haltmask      = ("haltmask",      defNothing PropRefT)
 
-isPropSet Nothing                 = False
-isPropSet (Just (PropBool False)) = False
-isPropSet (Just _)                = True
+
+isPropSet :: Fix ElabF -> Text -> Bool
+isPropSet f p = isJust $ f ^? _Fix . eprops . ix p . _Just
 
 getPropType :: Text -> Maybe PropType
 getPropType p = do
     compProps <- M.lookup Field defDefs
     prop <- M.lookup p compProps
     return $ prop ^. ptype
+
 
 addProperty p n = foldl (addCompProperty n) p (ctypes n)
 
@@ -108,6 +124,7 @@ defDefs = M.fromList [
    (Field,   M.fromList [ p_we
                         , p_hw
                         , p_sw
+                        , p_incr
                         , p_name
                         , p_fieldwidth
                         , p_desc
@@ -130,10 +147,18 @@ defDefs = M.fromList [
                         , p_decrsaturate
                         , p_incrthreshold
                         , p_decrthreshold
+                        , p_incrwidth
+                        , p_decrwidth
+                        , p_incrvalue
+                        , p_decrvalue
                         , p_intr
                         , p_sticky
                         , p_nonsticky
                         , p_stickybit
+                        , p_enable
+                        , p_enablemask
+                        , p_haltenable
+                        , p_haltmask
                         ]),
 
    (Reg,     M.fromList [ p_desc
@@ -161,9 +186,10 @@ exMap = foldl M.union M.empty (map f exSets)
         exSets =
           [ ["activehigh", "activelow"]
           , ["woclr", "woset"]
-          , ["we", "wel"]
+--          , ["we", "wel"]
           , ["hwenable", "hwmask"]
-          , ["counter", "intr"]
+          --, ["counter", "intr"]
+          , ["counter"]
           , ["incrvalue", "incrwidth"]
           , ["decrvalue", "decrwidth"]
           , ["nonsticky", "sticky", "stickybit"]
@@ -180,7 +206,8 @@ getNumProp k e =
    case e ^? _Fix . eprops . ix k of
       Just (Just (PropNum n)) -> n
       Just _ -> error $ T.unpack (k <> " is not a numeric property")
-      Nothing -> error $ T.unpack (k <> " is not a valid property")
+      Nothing -> error $ T.unpack (k <> " is not a valid property for " <> n)
+   where n = e ^. _Fix . ename
 
 getBoolProp :: Text -> Fix ElabF -> Bool
 getBoolProp k e =
@@ -240,3 +267,30 @@ calcAccess f =
                                                             , ("wset", Set)
                                                             , ("woclr", OneClear)
                                                             , ("woset", OneSet)]
+
+type instance IxValue (Fix ElabF) = Fix ElabF
+type instance Index (Fix ElabF) = Text
+
+instance Ixed (Fix ElabF) where
+    ix k f m = case break (\x -> unfix x ^. ename == k) (unfix m ^. einst) of
+                (_, []) -> pure m
+                (i, l:ls) -> f l <&> \x -> Fix $ unfix m & einst .~ (i ++ (x:ls))
+
+buildTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
+  where f y x =
+         case e ^? (runTraversal x . ix y) of
+            Nothing -> Left y
+            Just _  -> Right $ Traversal $ runTraversal x . ix y
+
+buildPropTraversal e path = buildTraversal e (concatMap buildPath path)
+   where
+     buildPath (PathElem s Nothing) = [s]
+     buildPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
+
+setPostProp :: ([PathElem], Text, PropRHS) -> Fix ElabF -> Fix ElabF
+setPostProp (path, prop, rhs) e =
+  case buildPropTraversal e path of
+    (Right t') -> e & runTraversal t' . _Fix . eprops %~ assignProp prop rhs
+    Left _ -> error "booo"
+
+setProp n p e = e & _Fix . eprops %~ assignProp n p

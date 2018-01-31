@@ -13,6 +13,7 @@ import Data.Text.Lazy (toStrict)
 import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
+import qualified Data.Map as ML
 import qualified Data.Set as S
 import qualified Data.Text.Prettyprint.Doc as P
 import Data.Text.Prettyprint.Doc.Render.Text (renderStrict)
@@ -21,7 +22,7 @@ import Text.Blaze.Renderer.Text
 import Text.Heterocephalus
 import Text.Show.Deriving
 import Debug.Trace
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe, isJust, fromJust)
 
 import Elab2
 import Props
@@ -40,7 +41,9 @@ data RegsFilter = FilterInternal | FilterExternal | FilterNone
 getProp t e p =
   case e ^? _Fix . eprops . ix p . _Just . t of
     Just b -> b
-    _ -> trace (show (e ^. _Fix . ename, p)) (error "you dun f'd up")
+    _ -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, p)) (error "you dun f'd up")
+  where
+    a = e ^? _Fix . eprops . ix p . _Just
 
 getBool = getProp _PropBool
 getNum  = getProp _PropNum
@@ -49,7 +52,15 @@ getIntr = getProp _PropIntr
 getRef  = getProp _PropRef
 getLit  = getProp _PropLit
 
-referenced e p = False -- S.member p (e ^. _Fix . propRef)
+safeGetProp t e p = e ^? _Fix . eprops . ix p . _Just . t
+
+safeGetBool = safeGetProp _PropBool
+safeGetNum  = safeGetProp _PropNum
+safeGetEnum = safeGetProp _PropEnum
+safeGetIntr = safeGetProp _PropIntr
+safeGetRef  = safeGetProp _PropRef
+safeGetLit  = safeGetProp _PropLit
+
 
 getPropF t e p =
   case e ^? eprops . ix p . _Just . t of
@@ -104,38 +115,10 @@ fqName e = do
                                                  _          -> "_"
                                             in pathName' (p <> n1 <> delim) xs
 
-pushOffset :: Integer -> Fix ElabF -> Fix ElabF
-pushOffset o e =
-  case e ^. _Fix . etype of
-    Field -> e
-    Array -> e & _Fix . eoffset .~ newoffset
-               & _Fix . einst . traverse %~ pushOffset o
-    _     -> e & _Fix . eoffset .~ newoffset
-               & _Fix . einst . traverse %~ pushOffset newoffset
-
-  where newoffset = e ^. _Fix . eoffset + o
 
 
-isReg e   = e ^. _Fix . etype == Reg
-isField e = e ^. _Fix . etype == Field
 
-getElem :: (Fix ElabF -> Bool) -> RegsFilter -> Fix ElabF -> [Fix ElabF]
-getElem t fe e =
-  if t e
-    then case fe of
-      FilterNone -> [e]
-      FilterInternal -> if e ^. _Fix . eext then [] else [e]
-      FilterExternal -> if e ^. _Fix . eext then [e] else []
-    else
-      concatMap (getElem t fe) (e ^. _Fix . einst)
 
-verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) rs fs es, wires rs fs es, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
-   where rs = getElem isReg FilterInternal x'
-         fs = getElem isField FilterInternal x'
-         es = []--filterExt x'
-         x'  = pushOffset 0 (evalState (fqName x) [])
-
-getFields = getElem isField FilterNone
 
 wires rs fs es = toStrict $ renderMarkup [compileText|
 reg [31:0] _v_rdata;
@@ -154,65 +137,22 @@ clog2 :: Integer -> Integer
 clog2 x = ceiling (logBase 2 (fromIntegral x))
 
 
-header :: Text -> [Fix ElabF] -> [Fix ElabF] -> [ExtInfo] -> Text
-header n rs fs es = toStrict $ renderMarkup [compileText|
-`default_nettype none
-module #{n} (
-  input  wire clk,
-  input  wire rst_l,
-
-%{forall f <- fs}
-%{if hw_readable f}
-  output reg #{arrayF f}  #{fn f},
-%{endif}
-%{if hw_writable f}
-  input wire #{arrayF f}  #{fn f}_wrdat,
-%{endif}
-%{if getBool f "we"}
-  input wire #{fns f "we"},
-%{endif}
-%{if getBool f "wel"}
-  input wire #{fns f "wel"},
-%{endif}
-%{if getBool f "swacc"}
-  input wire #{fns f "swacc"},
-%{endif}
-%{if getBool f "swmod"}
-  input wire #{fns f "swmod"},
-%{endif}
-%{if getBool f "counter"}
-  input wire #{array' (getNum f "incrwidth")} #{fns f "incr"},
-  input wire #{array' (getNum f "incrwidth")} #{fns f "decr"},
-%{endif}
-%{endforall}
-%{forall e <- es}
-  output reg #{e ^. xname}_rd,
-  output reg #{e ^. xname}_wr,
-  output reg [#{eaddr e}:0] #{e ^. xname}_addr,
-  output reg [31:0] #{e ^. xname}_wdata,
-  input wire [31:0] #{e ^. xname}_rdata,
-  input wire [31:0] #{e ^. xname}_ack,
-%{endforall}
-%{forall r <- rs}
-%{if isIntrReg r}
-  output reg #{fn r}_intr,
-%{endif}
-%{endforall}
-
-  input  wire        rd,
-  input  wire        wr,
-  input  wire [31:0] wdata,
-  input  wire [31:0] addr,
-  output reg  [31:0] rdata,
-  output reg         ack,
-  output reg         err
-);
-|]
+header :: Text -> [VIO] -> Text
+header n ios = pretty2text $ pt "`default_nettype none" <> P.line <> pt "module" <+> pretty n <+> P.parens (uHang (showIOs ios <> P.line)) <> P.semi
   where
-    eaddr e = clog2 (e ^. xlast - e ^. xbase) - 1
-    hw_writable f = any (getEnum f "hw" ==) ["rw", "wr", "w"]
-    hw_readable f = any (getEnum f "hw" ==) ["rw", "wr", "r"]
-    iw f w p = toStrict $ renderMarkup [compileText|%{if getBool f p}input wire #{array' w} #{fn f}_#{p},%{endif}|]
+    showIOs x = P.vcat $  P.punctuate (P.comma) (map (pretty . showIO) x)
+    showIO (VIO Output n w) = "output reg " <> array' w <> n
+    showIO (VIO Input n w) = "input wire " <> array' w <> n
+
+addExt :: [ExtInfo] -> [VIO] -> [VIO]
+addExt = flip (foldl go)
+  where go io e = [ VIO Output ((e ^. xname) <> "_rd") 1
+                  , VIO Output ((e ^. xname) <> "_wr") 1
+                  , VIO Output ((e ^. xname) <> "_addr") (clog2 (e ^. xlast - e ^. xbase))
+                  , VIO Input  ((e ^. xname) <> "_wdata") 32
+                  , VIO Input  ((e ^. xname) <> "_rdata") 32
+                  , VIO Input  ((e ^. xname) <> "_ack") 1
+                  ] ++ io
 
 array' :: Integer -> Text
 array' 1 = toStrict ""
@@ -311,8 +251,6 @@ always @(posedge clk or negedge rst_l) begin
 end
 |]
   where intrSummary r = punctuate " || " (map (\x -> "_combUpdate_" <> fn x <> ".intr") (getFields r))
-      --intrFields r = filter (\x -> snd (getIntr x "intr") /= NonIntr) (r ^. _Fix . einst)
-      --intrSigs r = (renderStrict . P.layoutPretty P.defaultLayoutOptions) $ P.hcat (P.punctuate " || " [pretty $ "_v_" <> fns f "intr" | f <- intrFields r])
 
 pt :: Text -> P.Doc ann
 pt = pretty
@@ -393,7 +331,7 @@ fieldHWUpdate f =
       hw_data = (fn f) <> "_wrdat"
       sticky = "_r_" <> (fn f) <> "_sticky"
 
---fieldSWUpdate :: Fix ElabF -> [Maybe (Fix VlogF)]
+fieldSWUpdate :: Fix ElabF -> Fix ElabF -> [Maybe (Fix VlogF)]
 fieldSWUpdate r f =
    if access == RO
    then []
@@ -421,7 +359,7 @@ fieldSWUpdate r f =
    where wracc x  = Just $ vIf (vStmt $ "_readMux." <> (fn r) <> "_acc" <> " && wr") x
          rdacc x  = Just $ vIf (vStmt $ "_readMux." <> (fn r) <> "_acc" <> " && rd") x
          clr     = bAssign "next" (zeros (getNumProp "fieldwidth" f))
-         set     = bAssign "next" (ones  (getNumProp "fieldwidth" f))
+         set     = bAssign "next" (onesF f)
          normal  = bAssign "next" wdata
          w1clr   = bAssign "next" (sfix' f "" <> " && ~"  <> wdata)
          w1set   = bAssign "next" (sfix' f "" <> " || "   <> wdata)
@@ -433,7 +371,10 @@ fieldSWUpdate r f =
          access  = calcAccess f
 
 zeros w = (T.pack . show) w <> "'b0"
-ones  w = "{" <> (T.pack . show) w <> "{1'b0}}"
+ones  w = "{" <> (T.pack . show) w <> "{1'b1}}"
+
+zerosF f = zeros (getNumProp "fieldwidth" f)
+onesF f = ones (getNumProp "fieldwidth" f)
 
 fieldIntrUpdate :: Fix ElabF -> Maybe (Fix VlogF)
 fieldIntrUpdate f =
@@ -447,15 +388,6 @@ fieldIntrUpdate f =
                               )
    where prev = ""
 
-intrSummary :: Fix ElabF -> Maybe (Fix VlogF)
-intrSummary r = 
-   if not True
-   then Nothing
-   else Just (vBlock (Just "rintr") s)
-   where
-      s = [vStmt ("wire intr = " <> "1'b0")]
-      --intrFields r = filter (\x -> snd (getIntr x "intr") /= NonIntr) (r ^. _Fix . einst)
-      --intrSigs r = (renderStrict . P.layoutPretty P.defaultLayoutOptions) $ P.hcat (P.punctuate " || " [pretty $ "_v_" <> fns f "intr" | f <- intrFields r])
 
 fieldStickyUpdate :: Fix ElabF -> Maybe (Fix VlogF)
 fieldStickyUpdate f =
@@ -468,55 +400,42 @@ fieldStickyUpdate f =
    where
       stickyType = StickyBit
 
-propSet :: Text -> Fix ElabF -> Bool
-propSet = undefined
-
 fieldCTRUpdate :: Fix ElabF -> Maybe (Fix VlogF)
 fieldCTRUpdate f =
-   case (upCtr, dnCtr) of
+   case (isUpCounter f, isDownCounter f) of
       (False, False) -> Nothing
       (True,  False) -> Just (vBlock (Just "ctr") (upDecl ++ upCtrBlock))
       (False, True)  -> Just (vBlock (Just "ctr") (dwDecl ++ dwCtrBlock))
       (True,  True)  -> Just (vBlock (Just "ctr") (udDecl ++ caseBlock))
    where
-      upCtr = False
-      dnCtr = False
-      incr = ""
-      decr = ""
-      blockname = "" :: Text
-      incrvalue    = "1" :: Text --getNumProp "incrvalue" f
-      decrvalue    = "1" :: Text --getNumProp "decrvalue" f
-      incrsaturate = "" :: Text --getNumProp "incrsaturate" f
-      decrsaturate = "" :: Text --getNumProp "decrsaturate" f
-
-      upDecl = [vStmt "reg incrsaturate", vStmt "reg overflow"]
-      dwDecl = [vStmt "reg decrsaturate", vStmt "reg underflow"]
+      upDecl = [vStmt "reg incrsaturate;", vStmt "reg overflow;"]
+      dwDecl = [vStmt "reg decrsaturate;", vStmt "reg underflow;"]
       udDecl = upDecl ++ dwDecl ++ [vStmt "reg wrap"]
 
-      uflowChk = if propSet "decrsaturate" f
-                 then [vIf (vStmt $ "underflow || next > " <> decrsaturate)
-                          (bAssign "next" decrsaturate)]
+      uflowChk = if isPropSet f "decrsaturate"
+                 then [vIf (vStmt $ "underflow || next > " <> getLit f "decrsaturate")
+                          (bAssign "next" (getLit f "decrsaturate"))]
                  else []
 
-      oflowChk = if propSet "decrsaturate" f
-                 then [vIf (vStmt $ "underflow || next > " <> decrsaturate)
-                          (bAssign "next" decrsaturate)]
+      oflowChk = if isPropSet f "incrsaturate"
+                 then [vIf (vStmt $ "overflow || next > " <> (getLit f "incrsaturate"))
+                          (bAssign "next" (getLit f "incrsaturate"))]
                  else []
 
-      upCtrBlock =    [vIf (vStmt incr) (bAssign "{overflow, next}" ("next + " <> incrvalue))]
+      upCtrBlock =    [vIf (vStmt (getLit f "incr")) (bAssign "{overflow, next}" ("next + " <> getLit f "incrvalue"))]
                    ++ oflowChk
-                   ++ [bAssign "incrsaturate" ("next = " <> incrsaturate)]
+                   ++ [bAssign "incrsaturate" ("next == " <> (getLit f "incrsaturate"))]
 
-      dwCtrBlock = [  vIf (vStmt decr) (bAssign "{underflow, next}" ("next + " <> decrvalue))]
+      dwCtrBlock = [  vIf (vStmt (getLit f "incr")) (bAssign "{underflow, next}" ("next + " <> getLit f "decrvalue"))]
                    ++ uflowChk
-                   ++ [bAssign "decrsaturate" ("next = " <> decrsaturate)]
+                   ++ [bAssign "decrsaturate" ("next == " <> (getLit f "decrsaturate"))]
 
-      udCtrBlock = [ bAssign "{wrap, next}" ("next -" <> decrvalue <> " + " <> incrvalue)
-                   , vIf (vStmt "wrap") (vBlock Nothing [ bAssign "underflow" (decrvalue <> " > " <> incrvalue)
+      udCtrBlock = [ bAssign "{wrap, next}" ("next -" <> getLit f "decrvalue" <> " + " <> getLit f "incrvalue")
+                   , vIf (vStmt "wrap") (vBlock Nothing [ bAssign "underflow" (getLit f "decrvalue" <> " > " <> getLit f "incrvalue")
                                                 , bAssign "overflow" "~underflow"])
                    ] ++ uflowChk ++ oflowChk
 
-      caseBlock = [vCase (vStmt $ braces (punctuate "," [incr, decr]))
+      caseBlock = [vCase (vStmt $ braces (punctuate "," [getLit f "incr", getLit f "decr"]))
                          [ (vStmt ("2'b01" :: Text), vBlock Nothing dwCtrBlock)
                          , (vStmt ("2'b10" :: Text), vBlock Nothing upCtrBlock)
                          , (vStmt ("2'b11" :: Text), vBlock Nothing udCtrBlock)]]
@@ -527,6 +446,8 @@ isIntrReg r = any isIntrField (r ^. _Fix . einst)
 
 intrType f    = snd (getIntr f "intr")
 
+
+
 punctuate p = go
   where
     go []     = ""
@@ -535,3 +456,150 @@ punctuate p = go
 
 braces p = "{" <> p <> "}"
 parens p = "(" <> p <> ")"
+
+pushOffset :: Integer -> Fix ElabF -> Fix ElabF
+pushOffset o e =
+  case e ^. _Fix . etype of
+    Field -> e
+    Array -> e & _Fix . eoffset .~ newoffset
+               & _Fix . einst . traverse %~ pushOffset o
+    _     -> e & _Fix . eoffset .~ newoffset
+               & _Fix . einst . traverse %~ pushOffset newoffset
+
+  where newoffset = e ^. _Fix . eoffset + o
+
+
+data IODir = Input | Output deriving (Show)
+data VIO = VIO IODir Text Integer deriving (Show)
+
+addIO :: VIO -> State [VIO] ()
+addIO v = modify (\x -> (v:x))
+
+initIO =
+  [ VIO Input "rd"      1
+  , VIO Input  "wr"     1
+  , VIO Input  "wdata" 32
+  , VIO Input  "addr" 32
+  , VIO Output "rdata" 32
+  , VIO Output "ack"    1
+  , VIO Output "err"    1
+  , VIO Input "rst_l"    1
+  , VIO Input "clk"    1
+  ]
+
+f' :: [(Bool, Maybe VIO, Maybe PropRHS)] -> Maybe PropRHS -> State [VIO] (Maybe PropRHS)
+f' p d = go p
+   where go [] = return d
+         go ((pred, io, prop):xs) = if pred
+                                    then do
+                                      when (isJust io) (addIO (fromJust io))
+                                      return (if isJust prop then prop else d)
+                                    else go xs
+
+isHWReadable f   = any (getEnum f "hw" ==) ["rw", "wr", "r"]
+isHWWritable f   = any (getEnum f "hw" ==) ["rw", "wr", "w"] ||
+                   any (isPropSet f) ["we", "wel"]
+isIntr f         = snd (getIntr f "intr") /= NonIntr
+isCounter f      = getBool f "counter"
+isUpCounter f    = (getBool f "counter") && (anyIncrSet f || (not $ anyDecrSet f))
+isDownCounter f  = (getBool f "counter") && anyDecrSet f
+anyIncrSet f = any (isPropSet f) ["incr", "incrsaturate", "incrthreshold"]
+anyDecrSet f = any (isPropSet f) ["decr", "decrsaturate", "decrthreshold"]
+
+--Convert RHS references to signal names
+--Add IO as needed
+convertProps :: Fix ElabF -> State [VIO] (Fix ElabF)
+convertProps e = do
+  ni <- mapM convertProps (e ^. _Fix . einst)
+  let e' = e & _Fix . einst .~ ni
+  np <- M.traverseWithKey inspectProp (e' ^. _Fix . eprops)
+  let e'' = e' & _Fix . eprops .~ np
+  when (e ^. _Fix . etype == Field && isHWReadable e'')
+       (addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
+  when (e ^. _Fix . etype == Reg && isIntrReg e'')
+       (addIO $ VIO Output (fn e <> "_intr") 1)
+  return e''
+  where inspectProp :: Text -> Maybe (PropRHS) -> State [VIO] (Maybe PropRHS)
+        inspectProp k v =
+          case (k `M.lookup` l1) of
+            Just a      -> f' a v
+            Nothing     -> return v
+        l1 = ML.fromList 
+               [ ("we",             [ ( isHWWritable e && (safeGetBool e "we" == Just True)
+                                      , Just (VIO Input ((fn e) <> "_" <>  "we") 1)
+                                      , Just (PropLit ((fn e) <> "_" <>  "we"))
+                                      )
+                                    ])
+               , ("incr",           [ ( isCounter e && not (isPropSet e "incr")
+                                      , Just (VIO Input ((fn e) <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
+                                      , Just (PropLit ((fn e) <> "_" <>  "incr"))
+                                      )
+                                    ])
+               , ("incrvalue",      [ ( isUpCounter e && (isJust (safeGetNum e "incrwidth"))
+                                      , Nothing
+                                      , Just (PropLit ((fn e) <> "_" <>  "incr"))
+                                      )
+                                    , ( isUpCounter e && not (isPropSet e "incrvalue")
+                                      , Nothing
+                                      , Just (PropLit "1")
+                                      )
+                                    ])
+               , ("incrsaturate",   [ ( isUpCounter e && not (isPropSet e "incrsaturate")
+                                      , Nothing
+                                      , Just (PropLit (onesF e))
+                                      )
+                                    ])
+               , ("incrthreshold",  [ ( isUpCounter e && (safeGetBool e "incrthreshold" == Just True)
+                                      , Nothing
+                                      , Just (PropLit (onesF e))
+                                      )
+                                    ])
+               , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output ((fn e) <> "_" <>  "swmod") 1), Nothing) ])
+               , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output ((fn e) <> "_" <>  "swacc") 1), Nothing) ])
+               ]
+
+pushPostProp :: Fix ElabF -> Fix ElabF
+pushPostProp e = foldl (.) id (map f $ e ^. _Fix . epostProps)
+                              (e & _Fix . einst . traverse %~ pushPostProp)
+
+   where f (path, prop, rhs) =
+           case rhs of
+             (PropRef rPath (Just rProp)) ->
+               case (isCtrSig, isUpdateSig, isWire) of
+                 (True,  False, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> ".ctr." <> rProp))
+                 (False,  True, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> "." <> rProp))
+                 (False, False,  True) -> setPostProp (path, prop, PropLit (ff <> "_" <> rProp))
+               where t = buildPropTraversal e rPath
+                     ff = case t of
+                            Left e -> (error . T.unpack) e
+                            Right t -> (fn . fromJust) (e ^? runTraversal t)
+                     isCtrSig = rProp `elem` ["incrsaturate", "overflow", "decrstaturate", "underflow"]
+                     isUpdateSig = rProp `elem` ["next", "intr"]
+                     isWire = rProp `elem` ["we", "wel", "swacc", "swmod", "incr"]
+             _          -> setPostProp (path, prop, rhs)
+
+
+isReg e   = e ^. _Fix . etype == Reg
+isField e = e ^. _Fix . etype == Field
+
+getElem :: (Fix ElabF -> Bool) -> RegsFilter -> Fix ElabF -> [Fix ElabF]
+getElem t fe e =
+  if t e
+    then case fe of
+      FilterNone -> [e]
+      FilterInternal -> if e ^. _Fix . eext then [] else [e]
+      FilterExternal -> if e ^. _Fix . eext then [e] else []
+    else
+      concatMap (getElem t fe) (e ^. _Fix . einst)
+
+getFields = getElem isField FilterNone
+
+verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) (addExt es io), wires rs fs es, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
+   where rs = getElem isReg FilterInternal x''
+         fs = getElem isField FilterInternal x''
+         es = []--filterExt x'
+         x'  = (pushPostProp . pushOffset 0) (evalState (fqName x) [])
+         (x'', io) = runState (convertProps x') initIO
+
+
+

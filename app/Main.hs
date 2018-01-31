@@ -26,7 +26,7 @@ import Debug.Trace
 
 main :: IO ()
 main = do
-  res <- parseFile "test/srdl/user_prop.srdl"
+  res <- parseFile "test/srdl/intr.srdl"
   if res == Nothing
     then return ()
     else do

@@ -35,7 +35,6 @@ module Types (
  , _PropNum
  , _PropBool
  , _PropRef
- , _PropPath
  , _PropIntr
  , _PropEnum
  ) where
@@ -54,7 +53,6 @@ import Text.Show.Deriving
 import Data.Eq.Deriving
 
 type Identifier = Text
-type ElemPath = [(Identifier, Maybe Array)]
 
 data SymTab a = SymTab Int (M.Map Text a)
 
@@ -139,7 +137,6 @@ data PropType =
    | PropNumT
    | PropBoolT
    | PropRefT
-   | PropPathT
    | PropIntrT
    | PropEnumT deriving (Eq)
 
@@ -148,7 +145,6 @@ instance Show PropType where
   show PropNumT  = "Numeric"
   show PropBoolT = "Boolean"
   show PropRefT  = "Reference"
-  show PropPathT = "Path"
   show PropIntrT = "intr"
   show PropEnumT = "Enumeration"
 
@@ -159,8 +155,7 @@ data PropRHS =
      PropLit  Text
    | PropNum  Integer
    | PropBool Bool
-   | PropRef  ElemPath Identifier
-   | PropPath ElemPath
+   | PropRef  [PathElem] (Maybe Identifier)
    | PropIntr IsSticky IntrType
    | PropEnum Identifier deriving (Show,Eq)
 
@@ -185,6 +180,7 @@ data ElabF a = ElabF {
     _estride    :: Integer,
     _eext       :: Bool
 } deriving (Show, Functor)
+
 
 $(makePrisms ''Fix)
 $(makePrisms ''PropRHS)
