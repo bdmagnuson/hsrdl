@@ -6,7 +6,7 @@ module Parser (
        parseFile
      ) where
 
-import GHC.IO
+--import GHC.IO
 
 import Control.Monad
 import Control.Comonad
@@ -20,10 +20,12 @@ import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
 import Data.Text.IO (readFile)
+import Control.Monad.IO.Class
 
 import qualified Data.Text as T
 import Data.Text (Text, empty)
 import Data.Monoid ((<>))
+import Debug.Trace
 
 import Props
 import Types hiding (ElabF)
@@ -39,10 +41,11 @@ data ParseState = ParseState {
     ext      :: Maybe Bool,
     anonIdx  :: Int,
     syms     :: S.SymTab (Expr SourcePos),
-    topInst  :: [Text]
+    topInst  :: [Text],
+    input    :: [Text]
 } deriving (Show)
 
-type SrdlParser = ReaderT ReaderEnv (StateT ParseState Parser)
+type SrdlParser = ReaderT ReaderEnv (StateT ParseState (ParsecT Dec Text IO))
 
 sc = L.space (void spaceChar) lineCmnt blockCmnt
   where lineCmnt  = L.skipLineComment "//"
@@ -77,7 +80,7 @@ data ReaderEnv = ReaderEnv {
     level :: Int
 }
 
-rword :: Text -> ReaderT ReaderEnv (StateT ParseState Parser) ()
+rword :: Text -> SrdlParser ()
 rword w = lexeme $ string (T.unpack w) *> notFollowedBy alphaNumChar *> sc
 
 braces = between lbrace rbrace
@@ -91,19 +94,44 @@ parseTop = do
 parseExpr :: SrdlParser (Expr SourcePos)
 parseExpr = do
    st <- lift get
-   case loc st of
-      ANON_DEF -> parseCompInst <* choice [c, s]
-        where
-            s = do
-                a <- semi
-                lift (modify (\s -> s {loc = CHILD}))
-                return a
-            c = comma
-      CHILD ->
-            (try parseCompDef)
-        <|> parsePropAssign
-        <|> parsePropDef
-        <|> parseExpCompInst
+   traceM "hi"
+   void $ optional (try parseInclude)
+   traceM "hi"
+   e <- case loc st of
+          ANON_DEF -> parseCompInst <* choice [c, s]
+            where
+                s = do
+                    a <- semi
+                    lift (modify (\s -> s {loc = CHILD}))
+                    return a
+                c = comma
+          CHILD ->
+                (try parseCompDef)
+            <|> parsePropAssign
+            <|> parsePropDef
+            <|> parseExpCompInst
+   end <- option False (True <$ hidden eof)
+   s <- lift get
+   when (end && (input s /= [])) $ do
+                                  traceM "hi?"
+                                  popPosition
+                                  setInput (head $ input s)
+                                  traceM (show . head $ input s)
+                                  lift (modify (\s -> s {input = tail (input s)}))
+   return e
+
+
+parseInclude = do
+   rword "`include"
+   file <- between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_'))
+   s <- liftIO (Data.Text.IO.readFile file)
+   p <- getPosition
+   i <- getInput
+   lift (modify (\s -> s {input = i:(input s)}))
+   pushPosition p
+   setPosition (initialPos file)
+   setInput s
+
 
 parseCompName = do
     pos <- getPosition
@@ -138,7 +166,7 @@ parseCompType =
    <|> parseRsvdRet "regfile" Regfile
    <|> parseRsvdRet "signal"  Signal
 
-parseRsvdRet :: Text -> b -> ReaderT ReaderEnv (StateT ParseState Parser) b
+parseRsvdRet :: Text -> b -> SrdlParser b
 parseRsvdRet a b = do
    try (rword a)
    return b
@@ -258,9 +286,8 @@ parsePropDef = do
 
 parseNumeric = lexeme L.decimal
 
-type Foo a = ReaderT ReaderEnv (StateT ParseState Parser) a
 
-parseRHS :: Text -> ReaderT ReaderEnv (StateT ParseState Parser) PropRHS
+parseRHS :: Text -> SrdlParser PropRHS
 parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit <|> parseRef
    where parseLit = do
             a <- between dquote dquote (many (Text.Megaparsec.noneOf ("\"" :: [Char])))
@@ -299,9 +326,11 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" Nothing 0 M.empty [])
+pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" Nothing 0 M.empty [] [])
 
-hsrdlParseFile file = runParser pp file <$> Data.Text.IO.readFile file
+hsrdlParseFile file = do
+   f <- Data.Text.IO.readFile file
+   runParserT pp file f
 
 parseFile file = do
   p <- hsrdlParseFile file

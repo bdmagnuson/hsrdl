@@ -13,14 +13,11 @@ import Data.Maybe (fromJust)
 import Data.Text (unpack, pack)
 
 import System.IO
-import GHC.IO
 import Control.Lens
 
 import qualified Data.Text.Prettyprint.Doc.Render.Text
 import Data.Text.Prettyprint.Doc.Render.Text
 import qualified Data.Map.Strict as M
-
-
 import Control.Monad.State
 import Debug.Trace
 
@@ -40,7 +37,7 @@ main = do
           mapM_ (putStrLn . unpack)  (getMsgs st)
       return ()
 
-a = unsafePerformIO $ parseFile "test/srdl/user_prop.srdl"
-b = head $ elab (fromJust a)
-c = fromJust (b ^. _1)
+--a = unsafePerformIO $ parseFile "test/srdl/user_prop.srdl"
+--b = head $ elab (fromJust a)
+--c = fromJust (b ^. _1)
 

@@ -1,5 +1,7 @@
 addrmap interupt {
 
+   `include "test/srdl/include.srdl"
+
    reg block_int_r {
       default hw=w;
       default sw=rw;
@@ -11,10 +13,6 @@ addrmap interupt {
         level intr;
       } len_error;
    };
-
-   field {
-      level intr;
-   } len_error;
 
    reg block_int_en_r {
       name = "Example Block Interrupt Enable Register";

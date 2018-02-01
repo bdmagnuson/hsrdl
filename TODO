@@ -1,4 +1,3 @@
-Property reference RHS in Verilog backend
 Properties that support more than one type on RHS
 More property assignment validation
    Post assigns to non dynamic properties
