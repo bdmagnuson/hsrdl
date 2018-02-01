@@ -115,34 +115,25 @@ fqName e = do
                                                  _          -> "_"
                                             in pathName' (p <> n1 <> delim) xs
 
-
-
-
-
-
-wires rs fs es = toStrict $ renderMarkup [compileText|
-reg [31:0] _v_rdata;
-reg _v_ack;
-reg _v_err;
-
-%{forall f <- fs}
-%{if snd (getIntr f "intr") /= NonIntr}
-reg #{arrayF f}_r_#{fns f "sticky"};
-%{endif}
-%{endforall}|]
-
-
-
 clog2 :: Integer -> Integer
 clog2 x = ceiling (logBase 2 (fromIntegral x))
 
+wires :: [VIO] -> Text
+wires ios = pretty2text $ showIOs ios
+  where
+    showIOs x = P.vcat $ map (pretty . showIO) (filter p x)
+    showIO (VIO InternalReg n w) = "reg " <> array' w <> n <> ";"
+    p (VIO InternalReg _ _) = True
+    p _ = False
 
 header :: Text -> [VIO] -> Text
 header n ios = pretty2text $ pt "`default_nettype none" <> P.line <> pt "module" <+> pretty n <+> P.parens (uHang (showIOs ios <> P.line)) <> P.semi
   where
-    showIOs x = P.vcat $  P.punctuate (P.comma) (map (pretty . showIO) x)
+    showIOs x = P.vcat $  P.punctuate (P.comma) (map (pretty . showIO) (filter p x))
     showIO (VIO Output n w) = "output reg " <> array' w <> n
     showIO (VIO Input n w) = "input wire " <> array' w <> n
+    p (VIO InternalReg _ _) = False
+    p _ = True
 
 addExt :: [ExtInfo] -> [VIO] -> [VIO]
 addExt = flip (foldl go)
@@ -240,6 +231,9 @@ always @(posedge clk or negedge rst_l) begin
 %{if isIntrReg r}
     #{fn r}_intr <= #{intrSummary r};
 %{endif}
+%{if isHaltReg r}
+    #{fn r}_halt <= #{haltSummary r};
+%{endif}
 %{endforall}
 %{forall e <- es}
     #{e ^. xname}_rd <= rd && #{e ^. xname}_acc;
@@ -250,7 +244,20 @@ always @(posedge clk or negedge rst_l) begin
   end
 end
 |]
-  where intrSummary r = punctuate " || " (map (\x -> "_combUpdate_" <> fn x <> ".intr") (getFields r))
+  where intrSummary r = punctuate " || " (map intrFields (getFields r))
+        intrFields f =
+           case (isPropSet f "enable", isPropSet f "enablemask") of
+              (False, False) -> base <> ".intr"
+              (False, True)  -> parens (base <> ".intr && !" <> (getLit f "enablemask"))
+              (True,  False) -> parens (base <> ".intr && " <> (getLit f "enable"))
+           where base = "_combUpdate_" <> fn f
+        haltSummary r = punctuate " || " (map haltFields (getFields r))
+        haltFields f =
+           case (isPropSet f "haltenable", isPropSet f "haltmask") of
+              (False, False) -> base <> ".halt"
+              (False, True)  -> parens (base <> ".halt && !" <> (getLit f "haltmask"))
+              (True,  False) -> parens (base <> ".halt && " <> (getLit f "haltenable"))
+           where base = "_combUpdate_" <> fn f
 
 pt :: Text -> P.Doc ann
 pt = pretty
@@ -271,10 +278,10 @@ data VlogF a
   | Case a [(a, a)] deriving (Show, Eq, Functor)
 
 
-vStmt     = Fix . Stmt
-vBlock x y = Fix $ Block x y
-vIf x y    = Fix $ If x y
-vCase x y  = Fix $ Case x y
+vStmt        = Fix . Stmt
+vBlock x y   = Fix $ Block x y
+vIf x y      = Fix $ If x y
+vCase x y    = Fix $ Case x y
 vAlwaysComb  = Fix . AlwaysComb
 
 bAssign lhs rhs = vStmt (lhs <> " = " <> rhs <> ";")
@@ -300,6 +307,8 @@ combUpdate rs = P.vcat (map goR rs)
                    catMaybes ([ (Just . vStmt) "reg next;"
                               , if isIntrField f then (Just . vStmt) "reg intr;" else Nothing
                               , if isIntrField f then (Just . vStmt) ("reg " <> arrayF f <> " sticky;") else Nothing
+                              , if isHaltField f then (Just . vStmt) "reg halt;" else Nothing
+                              , Just (bAssign "next" (fn f))
                               , fieldHWUpdate f ] ++
                                fieldSWUpdate r f  ++
                              [ fieldCTRUpdate f
@@ -361,10 +370,10 @@ fieldSWUpdate r f =
          clr     = bAssign "next" (zeros (getNumProp "fieldwidth" f))
          set     = bAssign "next" (onesF f)
          normal  = bAssign "next" wdata
-         w1clr   = bAssign "next" (sfix' f "" <> " && ~"  <> wdata)
-         w1set   = bAssign "next" (sfix' f "" <> " || "   <> wdata)
-         w0clr   = bAssign "next" (sfix' f "" <> " && "   <> wdata)
-         w0set   = bAssign "next" (sfix' f "" <> " || ~"  <> wdata)
+         w1clr   = bAssign "next" ((fn f) <> "_wrdat" <> " && ~"  <> wdata)
+         w1set   = bAssign "next" ((fn f) <> "_wrdat" <> " || "   <> wdata)
+         w0clr   = bAssign "next" ((fn f) <> "_wrdat" <> " && "   <> wdata)
+         w0set   = bAssign "next" ((fn f) <> "_wrdat" <> " || ~"  <> wdata)
          wdata   = "wdata" <> "[" <> msb <> ":" <> lsb <> "]"
          msb     = (T.pack . show) (getNumProp "msb" f)
          lsb     = (T.pack . show) (getNumProp "lsb" f)
@@ -441,12 +450,12 @@ fieldCTRUpdate f =
                          , (vStmt ("2'b11" :: Text), vBlock Nothing udCtrBlock)]]
 
 
-isIntrField f = snd (getIntr f "intr") /= NonIntr
-isIntrReg r = any isIntrField (r ^. _Fix . einst)
-
 intrType f    = snd (getIntr f "intr")
+isIntrField f = intrType f /= NonIntr
+isIntrReg r   = any isIntrField (r ^. _Fix . einst)
 
-
+isHaltField f = any (isPropSet f) ["haltenable", "haltmask"]
+isHaltReg r   = any isHaltField (r ^. _Fix . einst)
 
 punctuate p = go
   where
@@ -469,7 +478,7 @@ pushOffset o e =
   where newoffset = e ^. _Fix . eoffset + o
 
 
-data IODir = Input | Output deriving (Show)
+data IODir = Input | Output | Inout | InternalReg deriving (Show)
 data VIO = VIO IODir Text Integer deriving (Show)
 
 addIO :: VIO -> State [VIO] ()
@@ -485,6 +494,9 @@ initIO =
   , VIO Output "err"    1
   , VIO Input "rst_l"    1
   , VIO Input "clk"    1
+  , VIO InternalReg "_v_rdata" 32
+  , VIO InternalReg "_v_ack" 1
+  , VIO InternalReg "_v_err" 1
   ]
 
 f' :: [(Bool, Maybe VIO, Maybe PropRHS)] -> Maybe PropRHS -> State [VIO] (Maybe PropRHS)
@@ -514,10 +526,14 @@ convertProps e = do
   let e' = e & _Fix . einst .~ ni
   np <- M.traverseWithKey inspectProp (e' ^. _Fix . eprops)
   let e'' = e' & _Fix . eprops .~ np
-  when (e ^. _Fix . etype == Field && isHWReadable e'')
-       (addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
-  when (e ^. _Fix . etype == Reg && isIntrReg e'')
-       (addIO $ VIO Output (fn e <> "_intr") 1)
+  mapM_ (uncurry when)
+    [ (isField e && isHWReadable e'', addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
+    , (isField e && isHWWritable e'', addIO $ VIO Input (fn e <> "_wrdat") (getNum e "fieldwidth"))
+    , (isField e && not (isHWReadable e''), addIO $ VIO InternalReg (fn e) (getNum e "fieldwidth"))
+    , (isReg e   && isIntrReg e'',    addIO $ VIO Output (fn e <> "_intr") 1)
+    , (isField e && isIntrField e'',    addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
+    , (isReg e   && isHaltReg e'',    addIO $ VIO Output (fn e <> "_halt") 1)
+    ]
   return e''
   where inspectProp :: Text -> Maybe (PropRHS) -> State [VIO] (Maybe PropRHS)
         inspectProp k v =
@@ -564,18 +580,22 @@ pushPostProp e = foldl (.) id (map f $ e ^. _Fix . epostProps)
 
    where f (path, prop, rhs) =
            case rhs of
-             (PropRef rPath (Just rProp)) ->
-               case (isCtrSig, isUpdateSig, isWire) of
-                 (True,  False, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> ".ctr." <> rProp))
-                 (False,  True, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> "." <> rProp))
-                 (False, False,  True) -> setPostProp (path, prop, PropLit (ff <> "_" <> rProp))
+             (PropRef rPath rProp) ->
+               case rProp of
+                  Just rrProp ->
+                     case (isCtrSig, isUpdateSig, isWire) of
+                       (True,  False, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> ".ctr." <> rrProp))
+                       (False,  True, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> "." <> rrProp))
+                       (False, False,  True) -> setPostProp (path, prop, PropLit (ff <> "_" <> rrProp))
+                     where
+                       isCtrSig = rrProp `elem` ["incrsaturate", "overflow", "decrstaturate", "underflow"]
+                       isUpdateSig = rrProp `elem` ["next", "intr"]
+                       isWire = rrProp `elem` ["we", "wel", "swacc", "swmod", "incr"]
+                  Nothing -> setPostProp (path, prop, PropLit ff)
                where t = buildPropTraversal e rPath
                      ff = case t of
                             Left e -> (error . T.unpack) e
                             Right t -> (fn . fromJust) (e ^? runTraversal t)
-                     isCtrSig = rProp `elem` ["incrsaturate", "overflow", "decrstaturate", "underflow"]
-                     isUpdateSig = rProp `elem` ["next", "intr"]
-                     isWire = rProp `elem` ["we", "wel", "swacc", "swmod", "incr"]
              _          -> setPostProp (path, prop, rhs)
 
 
@@ -594,7 +614,7 @@ getElem t fe e =
 
 getFields = getElem isField FilterNone
 
-verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) (addExt es io), wires rs fs es, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
+verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) (addExt es io), wires io, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
    where rs = getElem isReg FilterInternal x''
          fs = getElem isField FilterInternal x''
          es = []--filterExt x'
