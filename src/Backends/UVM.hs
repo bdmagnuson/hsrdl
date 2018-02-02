@@ -1,4 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Backends.UVM
   ( generateUVM
@@ -6,23 +5,25 @@ module Backends.UVM
 
 import Control.Lens
 import Data.Functor.Foldable
-import Data.Text.Lazy (toStrict)
+import qualified Data.Text as T
 import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
 import Data.Text.Prettyprint.Doc.Render.Text (renderStrict)
 import qualified Data.Text.Prettyprint.Doc as P
 import Data.Text (Text)
 import qualified Data.Map.Strict as M
-import Data.List (partition)
+
+import Control.Monad (msum)
+import Data.Maybe (fromMaybe, fromJust, catMaybes, mapMaybe)
+import Data.List (partition, sortBy)
+import Data.Ord (comparing)
+import Data.Function (on)
 
 import qualified SymbolTable as ST
 import Types
-import qualified Data.Text as T
 import Props
-import Control.Monad (msum)
-import Data.Maybe (fromMaybe)
 
 generateUVM :: ST.SymTab (Fix ElabF) -> P.Doc Text
-generateUVM e = P.vcat $ map f (M.toList e)
+generateUVM e = P.vcat $ map f (sortBy (flip (comparing T.length) `on` fst) (M.toList e))
    where f (k, i) = P.vcat $ map (f' k) (M.toList (M.filter (\x -> x ^. _Fix . etype /= Field) i))
          f' k1 (k2, i) = uvmClass k1 k2 i
 
@@ -56,11 +57,11 @@ printDecl i =
       Array -> c <+> n <> P.brackets (pretty $ length (i ^. _Fix . einst)) <> P.semi
       _ -> c <+> n <> P.semi
    where c = sname i
-         n = pretty $ (i ^. _Fix . ename)
+         n = pretty $ i ^. _Fix . ename
 
 printNew Reg r = P.vcat [P.hang 3 (P.vcat [proto, body]), end]
    where proto = pt "function new(input string name = " <> P.dquotes (sname r) <> pt ");"
-         body  = pt "super.new(name," <+> (pretty $ getNumProp "regwidth" r) <> pt ", UVM_NO_COVERAGE);"
+         body  = pt "super.new(name," <+> pretty (getNumProp "regwidth" r) <> pt ", UVM_NO_COVERAGE);"
          end   = pt "endfunction"
 
 printNew _ r = P.vcat [P.hang 3 (P.vcat [proto, body]), end]
@@ -68,6 +69,20 @@ printNew _ r = P.vcat [P.hang 3 (P.vcat [proto, body]), end]
          body  = pt "super.new(name" <> pt ", UVM_NO_COVERAGE);"
          end   = pt "endfunction"
 
+postProps :: Fix ElabF -> P.Doc Text
+postProps i = P.vcat $ mapMaybe f (i ^. _Fix . epostProps)
+   where f (path, t, prop, rhs)
+           | prop == "reset" = Just (uvmPath <> pt ".set_reset" <> P.parens (pretty rhs) <> P.semi)
+           | prop `elem` ["rclr", "rset", "woclr", "woset", "sw"] =
+               let f' = setProp prop rhs (fromJust (i ^? runTraversal t))
+               in Just (uvmPath <> pt ".set_access" <> P.parens ((pt . T.pack . show . calcAccess) f') <> P.semi)
+           | otherwise = Nothing
+               where
+                  uvmPath :: P.Doc Text
+                  uvmPath = P.hcat $ P.punctuate P.dot (map uvmPath' path)
+                  uvmPath' :: PathElem -> P.Doc Text
+                  uvmPath' (PathElem s Nothing) = pt s
+                  uvmPath' (PathElem s (Just (ArrWidth w))) = pt s <> P.brackets (pretty w)
 
 printBuild Reg r = P.vcat [P.hang 3 (P.vcat [proto, create, config]), end]
    where proto = pt "virtual function void build();"
@@ -81,15 +96,16 @@ printBuild Reg r = P.vcat [P.hang 3 (P.vcat [proto, create, config]), end]
              access :: P.Doc Text
 
              access = P.dquotes $ (pt . T.pack . show . calcAccess) f
-             volitile = pretty $ (if hwWritable || counter then 0 else 1 :: Integer)
-             hwWritable = any id [getBoolProp "counter" f, getEnumProp "hw" f == "w", getEnumProp "hw" f == "rw"]
+             volitile = pretty (if hwWritable || counter then 0 else 1 :: Integer)
+             hwWritable = or [getBoolProp "counter" f, getEnumProp "hw" f == "w", getEnumProp "hw" f == "rw"]
              counter = getBoolProp "counter" f
              reset = pretty $ getNumProp "reset" f
              has_reset = pt "1"
              is_rand = pt "1"
              ind = pt "0"
 
-printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, sAdd, aAdd]), end]
+
+printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, postProps i, sAdd, aAdd]), end]
    where proto = pretty ("virtual function void build();" :: Text)
          end = pretty ("endfunction" :: Text)
          (scalar, array)    = partition (\x -> x ^. _Fix . etype /= Array) (i ^. _Fix . einst)
@@ -99,14 +115,14 @@ printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, sAdd, aAdd]), 
          n x = pt (x ^. _Fix . ename)
          sNew = P.vcat $ map (\x -> pt (x ^. _Fix . ename) <+> P.equals <+> pt "new();") scalar
          aNew = let n x = pt (x ^. _Fix . ename)
-                in P.vcat $ map (\x -> P.hang 3 $ P.vcat ["foreach" <> P.parens (n x <> pt "[i]"), (n x) <> pt "[i]" <+> P.equals <+> pt "new();"]) array
+                in P.vcat $ map (\x -> P.hang 3 $ P.vcat ["foreach" <> P.parens (n x <> pt "[i]"), n x <> pt "[i]" <+> P.equals <+> pt "new();"]) array
 
 
          regAdd' n o = pt "default_map.add_reg" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o, pt "RW"]) <> P.semi
          blkAdd' n o = pt "default_map.add_submap" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o]) <> P.semi
 
-         sAdd = P.vcat $ (map sregAdd scalarR) ++ (map aregAdd arrayR)
-         aAdd = P.vcat $ (map sblkAdd scalarB) ++ (map ablkAdd arrayB)
+         sAdd = P.vcat $ map sregAdd scalarR ++ map aregAdd arrayR
+         aAdd = P.vcat $ map sblkAdd scalarB ++ map ablkAdd arrayB
 
          sgenAdd f x = f (pt (x ^. _Fix . ename)) (pretty (x ^. _Fix . eoffset))
          agenAdd f x = let v = n x <> pt "[i]"
@@ -115,9 +131,9 @@ printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, sAdd, aAdd]), 
                            o = pretty b <+> pt "+" <+> pretty s <+> pt "*" <+> pt "i"
                        in P.hang 3 $ P.vcat ["foreach" <> P.parens v, f v o]
 
-         sregAdd x = sgenAdd regAdd' x
-         aregAdd x = agenAdd regAdd' x
-         sblkAdd x = sgenAdd blkAdd' x
-         ablkAdd x = agenAdd blkAdd' x
+         sregAdd = sgenAdd regAdd'
+         aregAdd = agenAdd regAdd'
+         sblkAdd = sgenAdd blkAdd'
+         ablkAdd = agenAdd blkAdd'
 
 

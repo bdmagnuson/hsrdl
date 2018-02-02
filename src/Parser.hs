@@ -102,7 +102,7 @@ parseExpr = do
                     return a
                 c = comma
           CHILD ->
-                (try parseCompDef)
+                try parseCompDef
             <|> parsePropAssign
             <|> parsePropDef
             <|> parseExpCompInst
@@ -121,7 +121,7 @@ parseInclude = do
    s <- liftIO (Data.Text.IO.readFile file)
    p <- getPosition
    i <- getInput
-   lift (modify (\s -> s {input = i:(input s)}))
+   lift (modify (\s -> s {input = i:input s}))
    pushPosition p
    setPosition (initialPos file)
    setInput s
@@ -262,7 +262,7 @@ parsePropDefBody = makePermParser $ (,,) <$$> p1 <||> p2 <|?> (Nothing, p3)
       p1 = rword "type" *> equal *> parseType <* semi
       p2 = rword "component" *> equal *> sepBy1 parseCompType pipe <* semi
       p3 = do
-         rhs <- rword "default" *> equal *> (parseRHS "") <* semi
+         rhs <- rword "default" *> equal *> parseRHS "" <* semi
          return $ Just rhs
       parseType =
            parseRsvdRet "string"  PropLitT
@@ -284,7 +284,7 @@ parseNumeric = lexeme L.decimal
 parseRHS :: Text -> SrdlParser PropRHS
 parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit <|> parseRef
    where parseLit = do
-            a <- between dquote dquote (many (Text.Megaparsec.noneOf ("\"" :: [Char])))
+            a <- between dquote dquote (many (Text.Megaparsec.noneOf ("\"" :: String)))
             return $ PropLit (T.pack a)
          parseNum = do
             a <- parseNumeric
@@ -294,9 +294,9 @@ parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> pa
             return $ PropBool a
          parseEnum = do
             a <- parseIdentifier'
-            case a `elem` (getEnumValues prop) of
-              False -> (fail . T.unpack) $ "Legal values for " <> prop <> " are " <> (T.pack . show) (getEnumValues prop)
-              True -> return (PropEnum a)
+            if a `elem` getEnumValues prop
+            then return (PropEnum a)
+            else (fail . T.unpack) $ "Legal values for " <> prop <> " are " <> (T.pack . show) (getEnumValues prop)
          parseRef = do
             path <- pathElem `sepBy` dot
             prop <- optional $ dref *> parseIdentifier'

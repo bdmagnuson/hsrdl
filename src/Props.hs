@@ -18,6 +18,7 @@ module Props (
      , getBoolProp
      , getEnumProp
      , calcAccess
+     , buildPropPath
      , buildPropTraversal
      , setPostProp
      , setProp
@@ -31,13 +32,10 @@ import Data.Functor.Foldable
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Monoid ((<>))
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, fromJust)
 import Control.Monad (msum)
 
 import Types
-
-import Data.Maybe (fromJust)
-
 
 typeOf :: PropRHS -> PropType
 typeOf (PropNum  _)    = PropNumT
@@ -61,7 +59,7 @@ defNothing a = Property a Nothing
 defEnum d    = Property PropEnumT (Just (PropEnum d))
 defIntr      = Property PropIntrT (Just (PropIntr NonSticky NonIntr))
 
-isEnum prop = any (== prop) (["hw", "sw", "priority", "precedence", "addressing"] :: [Text])
+isEnum prop = prop `elem` (["hw", "sw", "priority", "precedence", "addressing"] :: [Text])
 
 getEnumValues "hw" | (EnumDef m) <- accessType = M.keys m
 getEnumValues "sw" | (EnumDef m) <- accessType = M.keys m
@@ -282,10 +280,10 @@ buildTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
             Nothing -> Left y
             Just _  -> Right $ Traversal $ runTraversal x . ix y
 
-buildPropTraversal e path = buildTraversal e (concatMap buildPath path)
-   where
-     buildPath (PathElem s Nothing) = [s]
-     buildPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
+buildPropTraversal e path = buildTraversal e (concatMap buildPropPath path)
+
+buildPropPath (PathElem s Nothing) = [s]
+buildPropPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
 
 setPostProp :: (a ~ Fix ElabF) => (ReifiedTraversal a a a a, Text, PropRHS) -> Fix ElabF -> Fix ElabF
 setPostProp (t, prop, rhs) e = e & runTraversal t . _Fix . eprops %~ assignProp prop rhs

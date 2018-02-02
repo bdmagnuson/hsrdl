@@ -73,22 +73,24 @@ getEnumF = getPropF _PropEnum
 getLitF  = getPropF _PropLit
 
 filterExt :: Fix ElabF -> [ExtInfo]
-filterExt x = cata f x
+filterExt = cata f
   where f a = 
           case a ^. etype of
             Field -> []
             Array -> childRanges
             otherwise ->
-              case getBoolF a "sharedextbus" of
-                True  -> case (minimumOf (traverse . xbase) childRanges,
-                               maximumOf (traverse . xlast) childRanges) of
-                  (Nothing, _) -> []
-                  (_, Nothing) -> []
-                  (Just b, Just l) -> [ExtInfo {_xbase = b, _xlast = l, _xname = a ^. ename}]
-                False -> case (a ^. etype, a ^. eext) of
-                           (Reg, False) -> []
-                           (Reg, True) -> [ExtInfo {_xbase = l, _xlast = l, _xname = a ^. ename}]
-                           otherwise -> childRanges
+              if getBoolF a "sharedextbus"
+              then
+                case (minimumOf (traverse . xbase) childRanges,
+                      maximumOf (traverse . xlast) childRanges) of
+                       (Nothing, _) -> []
+                       (_, Nothing) -> []
+                       (Just b, Just l) -> [ExtInfo {_xbase = b, _xlast = l, _xname = a ^. ename}]
+              else
+                case (a ^. etype, a ^. eext) of
+                  (Reg, False) -> []
+                  (Reg, True) -> [ExtInfo {_xbase = l, _xlast = l, _xname = a ^. ename}]
+                  otherwise -> childRanges
             where
               childRanges = map (over xname (combine (a ^. etype) (a ^. ename))) (concat (a ^. einst))
               l = a ^. eoffset
@@ -108,7 +110,7 @@ fqName e = do
   where
     pathName = pathName' ""
     pathName' p [] = p
-    pathName' p ((_, n):[]) = p <> n
+    pathName' p [(_, n)] = p <> n
     pathName' p ((t1, n1):xs@((t2, _):_)) = let delim = case (t1, t2) of
                                                  (Array, _) -> ""
                                                  (_, Field) -> "__"
@@ -129,7 +131,7 @@ wires ios = pretty2text $ showIOs ios
 header :: Text -> [VIO] -> Text
 header n ios = pretty2text $ pt "`default_nettype none" <> P.line <> pt "module" <+> pretty n <+> P.parens (uHang (showIOs ios <> P.line)) <> P.semi
   where
-    showIOs x = P.vcat $  P.punctuate (P.comma) (map (pretty . showIO) (filter p x))
+    showIOs x = P.vcat $  P.punctuate P.comma (map (pretty . showIO) (filter p x))
     showIO (VIO Output n w) = "output reg " <> array' w <> n
     showIO (VIO Input n w) = "input wire " <> array' w <> n
     p (VIO InternalReg _ _) = False
@@ -248,15 +250,15 @@ end
         intrFields f =
            case (isPropSet f "enable", isPropSet f "enablemask") of
               (False, False) -> base <> ".intr"
-              (False, True)  -> parens (base <> ".intr && !" <> (getLit f "enablemask"))
-              (True,  False) -> parens (base <> ".intr && " <> (getLit f "enable"))
+              (False, True)  -> parens (base <> ".intr && !" <> getLit f "enablemask")
+              (True,  False) -> parens (base <> ".intr && " <> getLit f "enable")
            where base = "_combUpdate_" <> fn f
         haltSummary r = punctuate " || " (map haltFields (getFields r))
         haltFields f =
            case (isPropSet f "haltenable", isPropSet f "haltmask") of
               (False, False) -> base <> ".halt"
-              (False, True)  -> parens (base <> ".halt && !" <> (getLit f "haltmask"))
-              (True,  False) -> parens (base <> ".halt && " <> (getLit f "haltenable"))
+              (False, True)  -> parens (base <> ".halt && !" <> getLit f "haltmask")
+              (True,  False) -> parens (base <> ".halt && " <> getLit f "haltenable")
            where base = "_combUpdate_" <> fn f
 
 pt :: Text -> P.Doc ann
@@ -288,7 +290,7 @@ bAssign lhs rhs = vStmt (lhs <> " = " <> rhs <> ";")
 
 
 prettyVlog (Stmt a) = pretty a
-prettyVlog (Block Nothing (a:[])) = uHang (P.vcat [P.emptyDoc, a])
+prettyVlog (Block Nothing [a]) = uHang (P.vcat [P.emptyDoc, a])
 prettyVlog (Block Nothing a) = pt "begin" <> uHang (P.vcat a) <> pt "end"
 prettyVlog (Block (Just n) a) = pt "begin :" <+> pt n <> uHang (P.vcat a) <> P.line <> pt "end"
 prettyVlog (AlwaysComb b) = pt "always @(*)" <+> b
@@ -331,14 +333,14 @@ fieldHWUpdate f =
       (True, False,  True, False) -> Just (vIf we  assign)
       (True, False, False,  True) -> Just (vIf wel assign)
    where
-      hwWritable = any (getEnum f "hw" ==) ["rw", "wr", "w"]
+      hwWritable = getEnum f "hw" `elem` ["rw", "wr", "w"]
       we  = vStmt $ sfix' f "we"
       wel = vStmt $ "!" <> sfix' f "wel"
       assign = bAssign "next" hw_data
       maskedAssign = bAssign "next" ("(next & " <> sticky <> ") | (" <> 
                                      hw_data <> " & ~" <> sticky <> ")")
-      hw_data = (fn f) <> "_wrdat"
-      sticky = "_r_" <> (fn f) <> "_sticky"
+      hw_data = fn f <> "_wrdat"
+      sticky = "_r_" <> fn f <> "_sticky"
 
 fieldSWUpdate :: Fix ElabF -> Fix ElabF -> [Maybe (Fix VlogF)]
 fieldSWUpdate r f =
@@ -365,15 +367,15 @@ fieldSWUpdate r f =
       WO    -> [wracc normal]
       WOC   -> [wracc clr]
       WOS   -> [wracc set]
-   where wracc x  = Just $ vIf (vStmt $ "_readMux." <> (fn r) <> "_acc" <> " && wr") x
-         rdacc x  = Just $ vIf (vStmt $ "_readMux." <> (fn r) <> "_acc" <> " && rd") x
+   where wracc x  = Just $ vIf (vStmt $ "_readMux." <> fn r <> "_acc" <> " && wr") x
+         rdacc x  = Just $ vIf (vStmt $ "_readMux." <> fn r <> "_acc" <> " && rd") x
          clr     = bAssign "next" (zeros (getNumProp "fieldwidth" f))
          set     = bAssign "next" (onesF f)
          normal  = bAssign "next" wdata
-         w1clr   = bAssign "next" ((fn f) <> "_wrdat" <> " && ~"  <> wdata)
-         w1set   = bAssign "next" ((fn f) <> "_wrdat" <> " || "   <> wdata)
-         w0clr   = bAssign "next" ((fn f) <> "_wrdat" <> " && "   <> wdata)
-         w0set   = bAssign "next" ((fn f) <> "_wrdat" <> " || ~"  <> wdata)
+         w1clr   = bAssign "next" (fn f <> "_wrdat" <> " && ~"  <> wdata)
+         w1set   = bAssign "next" (fn f <> "_wrdat" <> " || "   <> wdata)
+         w0clr   = bAssign "next" (fn f <> "_wrdat" <> " && "   <> wdata)
+         w0set   = bAssign "next" (fn f <> "_wrdat" <> " || ~"  <> wdata)
          wdata   = "wdata" <> "[" <> msb <> ":" <> lsb <> "]"
          msb     = (T.pack . show) (getNumProp "msb" f)
          lsb     = (T.pack . show) (getNumProp "lsb" f)
@@ -427,17 +429,17 @@ fieldCTRUpdate f =
                  else []
 
       oflowChk = if isPropSet f "incrsaturate"
-                 then [vIf (vStmt $ "overflow || next > " <> (getLit f "incrsaturate"))
+                 then [vIf (vStmt $ "overflow || next > " <> getLit f "incrsaturate")
                           (bAssign "next" (getLit f "incrsaturate"))]
                  else []
 
       upCtrBlock =    [vIf (vStmt (getLit f "incr")) (bAssign "{overflow, next}" ("next + " <> getLit f "incrvalue"))]
                    ++ oflowChk
-                   ++ [bAssign "incrsaturate" ("next == " <> (getLit f "incrsaturate"))]
+                   ++ [bAssign "incrsaturate" ("next == " <> getLit f "incrsaturate")]
 
       dwCtrBlock = [  vIf (vStmt (getLit f "incr")) (bAssign "{underflow, next}" ("next + " <> getLit f "decrvalue"))]
                    ++ uflowChk
-                   ++ [bAssign "decrsaturate" ("next == " <> (getLit f "decrsaturate"))]
+                   ++ [bAssign "decrsaturate" ("next == " <> getLit f "decrsaturate")]
 
       udCtrBlock = [ bAssign "{wrap, next}" ("next -" <> getLit f "decrvalue" <> " + " <> getLit f "incrvalue")
                    , vIf (vStmt "wrap") (vBlock Nothing [ bAssign "underflow" (getLit f "decrvalue" <> " > " <> getLit f "incrvalue")
@@ -482,7 +484,7 @@ data IODir = Input | Output | Inout | InternalReg deriving (Show)
 data VIO = VIO IODir Text Integer deriving (Show)
 
 addIO :: VIO -> State [VIO] ()
-addIO v = modify (\x -> (v:x))
+addIO v = modify (\x -> v:x)
 
 initIO =
   [ VIO Input "rd"      1
@@ -504,17 +506,17 @@ f' p d = go p
    where go [] = return d
          go ((pred, io, prop):xs) = if pred
                                     then do
-                                      when (isJust io) (addIO (fromJust io))
+                                      mapM_ addIO io
                                       return (if isJust prop then prop else d)
                                     else go xs
 
-isHWReadable f   = any (getEnum f "hw" ==) ["rw", "wr", "r"]
-isHWWritable f   = any (getEnum f "hw" ==) ["rw", "wr", "w"] ||
+isHWReadable f   = getEnum f "hw" `elem` ["rw", "wr", "r"]
+isHWWritable f   = getEnum f "hw" `elem` ["rw", "wr", "w"] ||
                    any (isPropSet f) ["we", "wel"]
 isIntr f         = snd (getIntr f "intr") /= NonIntr
 isCounter f      = getBool f "counter"
-isUpCounter f    = (getBool f "counter") && (anyIncrSet f || (not $ anyDecrSet f))
-isDownCounter f  = (getBool f "counter") && anyDecrSet f
+isUpCounter f    = getBool f "counter" && (anyIncrSet f || not (anyDecrSet f))
+isDownCounter f  = getBool f "counter" && anyDecrSet f
 anyIncrSet f = any (isPropSet f) ["incr", "incrsaturate", "incrthreshold"]
 anyDecrSet f = any (isPropSet f) ["decr", "decrsaturate", "decrthreshold"]
 
@@ -535,25 +537,25 @@ convertProps e = do
     , (isReg e   && isHaltReg e'',    addIO $ VIO Output (fn e <> "_halt") 1)
     ]
   return e''
-  where inspectProp :: Text -> Maybe (PropRHS) -> State [VIO] (Maybe PropRHS)
+  where inspectProp :: Text -> Maybe PropRHS -> State [VIO] (Maybe PropRHS)
         inspectProp k v =
-          case (k `M.lookup` l1) of
+          case k `M.lookup` l1 of
             Just a      -> f' a v
             Nothing     -> return v
         l1 = ML.fromList 
                [ ("we",             [ ( isHWWritable e && (safeGetBool e "we" == Just True)
-                                      , Just (VIO Input ((fn e) <> "_" <>  "we") 1)
-                                      , Just (PropLit ((fn e) <> "_" <>  "we"))
+                                      , Just (VIO Input (fn e <> "_" <>  "we") 1)
+                                      , Just (PropLit (fn e <> "_" <>  "we"))
                                       )
                                     ])
                , ("incr",           [ ( isCounter e && not (isPropSet e "incr")
-                                      , Just (VIO Input ((fn e) <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
-                                      , Just (PropLit ((fn e) <> "_" <>  "incr"))
+                                      , Just (VIO Input (fn e <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
+                                      , Just (PropLit (fn e <> "_" <>  "incr"))
                                       )
                                     ])
-               , ("incrvalue",      [ ( isUpCounter e && (isJust (safeGetNum e "incrwidth"))
+               , ("incrvalue",      [ ( isUpCounter e && isJust (safeGetNum e "incrwidth")
                                       , Nothing
-                                      , Just (PropLit ((fn e) <> "_" <>  "incr"))
+                                      , Just (PropLit (fn e <> "_" <>  "incr"))
                                       )
                                     , ( isUpCounter e && not (isPropSet e "incrvalue")
                                       , Nothing
@@ -570,8 +572,8 @@ convertProps e = do
                                       , Just (PropLit (onesF e))
                                       )
                                     ])
-               , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output ((fn e) <> "_" <>  "swmod") 1), Nothing) ])
-               , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output ((fn e) <> "_" <>  "swacc") 1), Nothing) ])
+               , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output (fn e <> "_" <>  "swmod") 1), Nothing) ])
+               , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output (fn e <> "_" <>  "swacc") 1), Nothing) ])
                ]
 
 pushPostProp :: Fix ElabF -> Fix ElabF

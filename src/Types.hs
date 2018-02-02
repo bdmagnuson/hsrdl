@@ -54,6 +54,9 @@ import Data.Text (Text)
 import Text.Show.Deriving
 import Data.Eq.Deriving
 
+import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
+import qualified Data.Text.Prettyprint.Doc as P
+
 type Identifier = Text
 
 data SymTab a = SymTab Int (M.Map Text a)
@@ -161,6 +164,14 @@ data PropRHS =
    | PropRef  [PathElem] (Maybe Identifier)
    | PropIntr IsSticky IntrType
    | PropEnum Identifier deriving (Show,Eq)
+
+instance P.Pretty PropRHS where
+   pretty (PropLit a)    = pretty a
+   pretty (PropNum a)    = pretty a
+   pretty (PropBool a)   = pretty (if a then "1" else "0")
+   pretty (PropRef a b)  = pretty "ref"
+   pretty (PropIntr a b) = pretty "intr"
+   pretty (PropEnum a)   = pretty "enum"
 
 data Property = Property {
    _ptype    :: PropType,

@@ -87,9 +87,9 @@ assignBits pos (Just arr) (Just reg) = do
         then do
             lift (nextbit .= l + 1)
             lift (usedbits .= union)
-            (return . Just) $ (setProp "lsb" (PropNum r)) .
-                              (setProp "msb" (PropNum l)) .
-                              (setProp "fieldwidth" (PropNum (l - r + 1))) $ reg
+            (return . Just) $ setProp "lsb" (PropNum r) .
+                              setProp "msb" (PropNum l) .
+                              setProp "fieldwidth" (PropNum (l - r + 1)) $ reg
         else do
             logMsg err pos ("Field overlap on bits " <> (T.pack . show . S.toList) intersection)
             return Nothing
@@ -119,10 +119,10 @@ modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefau
 getSize x =
  case x ^. _Fix . etype of
    Field -> 0
-   Reg   -> (getNumProp "regwidth" x) `div` 8
+   Reg   -> getNumProp "regwidth" x `div` 8
    otherwise -> case maximumByOf traverse (\x y -> compare (x ^. _Fix . eoffset) (y ^. _Fix . eoffset)) (x ^. _Fix . einst) of
                   Nothing -> 0
-                  Just e -> e ^. _Fix . eoffset + (getSize e)
+                  Just e -> e ^. _Fix . eoffset + getSize e
 
 getAlign (Alignment x y z) = (x, y, z)
 
@@ -142,17 +142,15 @@ setOffset  x = do
            (Nothing, Nothing) -> ba
 
   let x'  = x & _Fix . eoffset .~ b
-  let x'' = if (x ^. _Fix . etype == Array)
+  let x'' = if x ^. _Fix . etype == Array
             then x' & _Fix . estride .~ arrStride
-                    & _Fix . einst %~ imap (\i x -> x & _Fix . eoffset .~ b + arrStride * (fromIntegral i))
+                    & _Fix . einst %~ imap (\i x -> x & _Fix . eoffset .~ b + arrStride * fromIntegral i)
             else x'
 
   when   (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + arrStride * (fromIntegral . length $ x ^.  _Fix . einst))
   unless (x ^. _Fix . etype == Array) $ lift (baseAddr .= b + getSize x)
   return x''
-  where arrStride = case stride of
-                       Nothing -> getSize (fromJust (x ^? _Fix . einst . ix 0))
-                       Just a -> a
+  where arrStride = fromMaybe (getSize (fromJust (x ^? _Fix . einst . ix 0))) stride
         (at', mod, stride) = getAlign (x ^. _Fix . ealign)
 
 instantiate :: Expr SourcePos -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
@@ -165,7 +163,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
                              logMsg err pos ("Unknown definition: " <> d <> " in " <> mconcat (env ^. scope))
                              return Nothing
                  Just  def -> elabInst def >>= calcOffsets >>= addCache (env ^. scope) >>= arrInst
-    Just (_, a) -> return (Just a) >>= arrInst >>= calcOffsets
+    Just (_, a) -> arrInst (Just a) >>= calcOffsets
 
   where
    addCache s (Just i) = do
@@ -177,7 +175,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
      case (x ^. _Fix . etype, arr) of
        (Field, _) -> assignBits pos arr (Just x)
        (_, Just (ArrWidth w)) ->
-          let newinst = x & _Fix . ealign .~ (Alignment Nothing Nothing Nothing)
+          let newinst = x & _Fix . ealign .~ Alignment Nothing Nothing Nothing
           in return $ Just $ x & _Fix . etype  .~ Array
                                & _Fix . einst  .~ zipWith (\x y -> y & _Fix . ename .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
        otherwise -> return (Just x)
@@ -189,10 +187,10 @@ instantiate (pos :< CompInst iext d n arr align) = do
      inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def))
      popDefs
      return inst
-     where newenv = (scope .~ (sc ++ [d]))-- . (rext .~ isext)
+     where newenv = scope .~ (sc ++ [d])-- . (rext .~ isext)
            initInst = do
              sp <- lift (use sprops)
-             (return . Just . Fix) $ ElabF
+             (return . Just . Fix) ElabF
                { _etype      = ctype def
                , _ename      = n
                , _eprops     = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
@@ -275,11 +273,11 @@ checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
 
 
 cType pos prop rhs (Just x) =
-  case checktype (x ^. ptype) rhs of
-    False -> do
+  if checktype (x ^. ptype) rhs
+  then return (Just ())
+  else do
       logMsg err pos ("Type mismatch: Property '" <> prop <> "' expecting " <> (T.pack . show) (x ^. ptype) <> " found " <> (T.pack . show) (typeOf rhs))
       return Nothing
-    True -> return (Just ())
 cType _ _ _ Nothing = return Nothing
 
 
