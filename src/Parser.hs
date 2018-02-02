@@ -6,8 +6,6 @@ module Parser (
        parseFile
      ) where
 
---import GHC.IO
-
 import Control.Monad
 import Control.Comonad
 import Control.Comonad.Cofree
@@ -94,9 +92,7 @@ parseTop = do
 parseExpr :: SrdlParser (Expr SourcePos)
 parseExpr = do
    st <- lift get
-   traceM "hi"
    void $ optional (try parseInclude)
-   traceM "hi"
    e <- case loc st of
           ANON_DEF -> parseCompInst <* choice [c, s]
             where
@@ -113,10 +109,8 @@ parseExpr = do
    end <- option False (True <$ hidden eof)
    s <- lift get
    when (end && (input s /= [])) $ do
-                                  traceM "hi?"
                                   popPosition
                                   setInput (head $ input s)
-                                  traceM (show . head $ input s)
                                   lift (modify (\s -> s {input = tail (input s)}))
    return e
 

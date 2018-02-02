@@ -21,9 +21,9 @@ import Props
 import Control.Monad (msum)
 import Data.Maybe (fromMaybe)
 
-generateUVM :: ST.SymTab (Fix ElabF) -> [[Text]]
-generateUVM e = map f (M.toList e)
-   where f (k, i) = map (f' k) (M.toList (M.filter (\x -> x ^. _Fix . etype /= Field) i))
+generateUVM :: ST.SymTab (Fix ElabF) -> P.Doc Text
+generateUVM e = P.vcat $ map f (M.toList e)
+   where f (k, i) = P.vcat $ map (f' k) (M.toList (M.filter (\x -> x ^. _Fix . etype /= Field) i))
          f' k1 (k2, i) = uvmClass k1 k2 i
 
 baseClass :: Fix ElabF -> Text
@@ -42,8 +42,8 @@ sname i = pretty $ delim (i ^. _Fix . escope)
 pt :: Text -> P.Doc ann
 pt = pretty
 
-uvmClass :: Text -> Text -> Fix ElabF -> Text
-uvmClass s n i = (renderStrict . P.layoutPretty P.defaultLayoutOptions) $ P.vcat [P.hang 3 (P.vcat [open, decl, new, build]), close]
+uvmClass :: Text -> Text -> Fix ElabF -> P.Doc Text
+uvmClass s n i = P.vcat [P.hang 3 (P.vcat [open, decl, new, build]), close]
    where
      open  = pt "class" <+> pretty (delim $ i ^. _Fix . escope) <+> pt "extends" <+> pretty (baseClass i) <> P.semi
      decl  = P.vcat $ map printDecl $ i ^. _Fix . einst

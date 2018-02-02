@@ -20,24 +20,52 @@ import Data.Text.Prettyprint.Doc.Render.Text
 import qualified Data.Map.Strict as M
 import Control.Monad.State
 import Debug.Trace
+import Options.Applicative
+import qualified Data.Text as T
+import Data.Monoid ((<>))
+import Data.Maybe (isJust)
+import Types (ename, _Fix)
+
+data OutputArg =
+     DefaultName
+   | SpecifiedName String
+
+data Args = Args
+  { input     :: String
+  , outputDir :: String
+  , svOutput  :: Maybe OutputArg
+  , uvmOutput :: Maybe OutputArg
+  }
+
+doit :: Args -> IO ()
+doit args = do
+  res <- parseFile (input args)
+  case res of
+     Nothing -> return ()
+     Just r -> mapM_ f (elab r)
+  where f x = case x of
+               (Nothing, st) -> mapM_ (putStrLn . unpack) (getMsgs st)
+               (Just t, st) -> do
+                 mapM_ (putStrLn . unpack) (getMsgs st)
+                 putDoc $ verilog t
+                 when (isJust (svOutput  args)) (withFile (svName  (svOutput  args) t) WriteMode (flip hPutDoc (verilog t)))
+                 when (isJust (uvmOutput args)) (withFile (uvmName (uvmOutput args) t) WriteMode (flip hPutDoc (generateUVM . getInstCache $ st)))
+        svName (Just args) t =
+          case args of
+            DefaultName     -> T.unpack $ (t ^. _Fix . ename) <> "_regs.sv"
+            SpecifiedName n -> n
+        uvmName (Just args) t =
+          case args of
+            DefaultName     -> T.unpack $ (t ^. _Fix . ename) <> "_uvm_regs.sv"
+            SpecifiedName n -> n
 
 main :: IO ()
-main = do
-  res <- parseFile "test/srdl/intr.srdl"
-  if res == Nothing
-    then return ()
-    else do
-      case head $ elab (fromJust res) of
-        (Nothing, st) -> mapM_  (putStrLn . unpack) (getMsgs st)
-        (Just t, st) -> do
-          putDoc $ verilog t
-          withFile "out.sv" WriteMode (flip hPutDoc (verilog t))
-          --(mapM_ . mapM_) (putStrLn . unpack) $ (generateUVM . getInstCache $ st)
-          putStrLn "success"
-          mapM_ (putStrLn . unpack)  (getMsgs st)
-      return ()
-
---a = unsafePerformIO $ parseFile "test/srdl/user_prop.srdl"
---b = head $ elab (fromJust a)
---c = fromJust (b ^. _1)
+main = doit =<< execParser (info opts fullDesc)
+  where
+    opts = Args <$> strOption (long "input" <> metavar "INPUT" <> help "Input SRDL file")
+                <*> strOption (long "output" <> metavar "DIR" <> help "Output directory" <> value ".")
+                <*> (optional $ (     (SpecifiedName <$> strOption (long "svfile"  <> metavar "FILE" <> help "SV"))
+                                  <|> (flag' DefaultName  (long "sv"  <> help "SV"))))
+                <*> (optional $ (     (SpecifiedName <$> strOption (long "uvmfile" <> metavar "FILE" <> help "UVM"))
+                                  <|> (flag' DefaultName  (long "uvm" <> help "UVM"))))
 
