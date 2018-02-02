@@ -287,10 +287,7 @@ buildPropTraversal e path = buildTraversal e (concatMap buildPath path)
      buildPath (PathElem s Nothing) = [s]
      buildPath (PathElem s (Just (ArrWidth w))) = [s, (T.pack . show) w]
 
-setPostProp :: ([PathElem], Text, PropRHS) -> Fix ElabF -> Fix ElabF
-setPostProp (path, prop, rhs) e =
-  case buildPropTraversal e path of
-    (Right t') -> e & runTraversal t' . _Fix . eprops %~ assignProp prop rhs
-    Left _ -> error "booo"
+setPostProp :: (a ~ Fix ElabF) => (ReifiedTraversal a a a a, Text, PropRHS) -> Fix ElabF -> Fix ElabF
+setPostProp (t, prop, rhs) e = e & runTraversal t . _Fix . eprops %~ assignProp prop rhs
 
 setProp n p e = e & _Fix . eprops %~ assignProp n p

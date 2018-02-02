@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 module Types (
    ExprF(..)
  , Expr
@@ -128,6 +130,7 @@ instance Show CompType where
    show Signal  = "signal"
    show Array   = "array"
 
+
 data EnumDef = EnumDef {
    values :: M.Map Identifier Integer
 } deriving (Show,Eq)
@@ -168,18 +171,24 @@ makeLenses ''Property
 
 type PropDefs = M.Map CompType (M.Map Identifier Property)
 
+instance (a ~ Fix ElabF) => Eq (ReifiedTraversal a a a a) where
+   (==) a b = True
+
+instance (a ~ Fix ElabF) => Show (ReifiedTraversal a a a a) where
+   show a = show ""
+
 data ElabF a = ElabF {
     _etype      :: CompType,
     _ename      :: Text,
     _eprops     :: M.Map Text (Maybe PropRHS),
-    _epostProps :: [([PathElem], Text, PropRHS)],
+    _epostProps :: [([PathElem], ReifiedTraversal (Fix ElabF) (Fix ElabF) (Fix ElabF) (Fix ElabF), Text, PropRHS)],
     _einst      :: [a],
     _ealign     :: Alignment,
     _eoffset    :: Integer,
     _escope     :: [Text],
     _estride    :: Integer,
     _eext       :: Bool
-} deriving (Show, Functor)
+} deriving (Functor)
 
 
 $(makePrisms ''Fix)

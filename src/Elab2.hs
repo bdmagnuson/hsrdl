@@ -115,9 +115,6 @@ popDefs :: ReaderT ReaderEnv ElabS ()
 popDefs  = lift (sprops %= \(x:xs) -> xs)
 modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= Just rhs)) [Signal, Field, Reg, Regfile, Addrmap]
 
--- maybeMapM f = runMaybeT . mapM (MaybeT . f)
---
-
 
 getSize x =
  case x ^. _Fix . etype of
@@ -243,7 +240,7 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
     Right l -> do
       legal <- checkAssign pos (e ^? runTraversal l . _Fix) prop rhs
       case legal of
-        Just () -> (return . Just) $ e & _Fix . epostProps %~ (++ [(path, prop, rhs)])
+        Just () -> (return . Just) $ e & _Fix . epostProps %~ (++ [(path, l, prop, rhs)])
         Nothing -> return Nothing
 
 
@@ -285,12 +282,6 @@ cType pos prop rhs (Just x) =
     True -> return (Just ())
 cType _ _ _ Nothing = return Nothing
 
-
---buildPropTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
---  where f y x =
---         case e ^? (runTraversal x . ix y) of
---            Nothing -> Left y
---            Just _  -> Right $ Traversal $ runTraversal x . ix y
 
 getDef syms scope def =
   case ST.lkup syms scope def of

@@ -578,25 +578,22 @@ pushPostProp :: Fix ElabF -> Fix ElabF
 pushPostProp e = foldl (.) id (map f $ e ^. _Fix . epostProps)
                               (e & _Fix . einst . traverse %~ pushPostProp)
 
-   where f (path, prop, rhs) =
+   where f (path, t, prop, rhs) =
            case rhs of
              (PropRef rPath rProp) ->
                case rProp of
                   Just rrProp ->
                      case (isCtrSig, isUpdateSig, isWire) of
-                       (True,  False, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> ".ctr." <> rrProp))
-                       (False,  True, False) -> setPostProp (path, prop, PropLit ("_combUpdate_" <> ff <> "." <> rrProp))
-                       (False, False,  True) -> setPostProp (path, prop, PropLit (ff <> "_" <> rrProp))
+                       (True,  False, False) -> setPostProp (t, prop, PropLit ("_combUpdate_" <> ff <> ".ctr." <> rrProp))
+                       (False,  True, False) -> setPostProp (t, prop, PropLit ("_combUpdate_" <> ff <> "." <> rrProp))
+                       (False, False,  True) -> setPostProp (t, prop, PropLit (ff <> "_" <> rrProp))
                      where
                        isCtrSig = rrProp `elem` ["incrsaturate", "overflow", "decrstaturate", "underflow"]
                        isUpdateSig = rrProp `elem` ["next", "intr"]
                        isWire = rrProp `elem` ["we", "wel", "swacc", "swmod", "incr"]
-                  Nothing -> setPostProp (path, prop, PropLit ff)
-               where t = buildPropTraversal e rPath
-                     ff = case t of
-                            Left e -> (error . T.unpack) e
-                            Right t -> (fn . fromJust) (e ^? runTraversal t)
-             _          -> setPostProp (path, prop, rhs)
+                  Nothing -> setPostProp (t, prop, PropLit ff)
+               where ff = (fn . fromJust) (e ^? runTraversal t)
+             _          -> setPostProp (t, prop, rhs)
 
 
 isReg e   = e ^. _Fix . etype == Reg
