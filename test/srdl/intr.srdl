@@ -48,5 +48,6 @@ addrmap interupt {
 
    block_a_int.crc_error->haltenable = block_a_halt_en.crc_error;
    block_a_int.len_error->haltenable = block_a_halt_en.len_error;
+   block_a_int.len_error->reset = 1;
 
 };
