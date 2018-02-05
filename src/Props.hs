@@ -11,6 +11,7 @@ module Props (
      , isEnum
      , getEnumValues
      , isPropSet
+     , isPropActive
      , exMap
      , assignProp
      , getNumProp
@@ -107,6 +108,12 @@ p_haltmask      = ("haltmask",      defNothing PropRefT)
 isPropSet :: Fix ElabF -> Text -> Bool
 isPropSet f p = isJust $ f ^? _Fix . eprops . ix p . _Just
 
+isPropActive f p =
+   case f ^? _Fix . eprops . ix p . _Just of
+      Nothing -> False
+      Just (PropBool False) -> False
+      _ ->  True
+
 getPropType :: Text -> Maybe PropType
 getPropType p = do
     compProps <- M.lookup Field defDefs
@@ -184,9 +191,9 @@ exMap = foldl M.union M.empty (map f exSets)
         exSets =
           [ ["activehigh", "activelow"]
           , ["woclr", "woset"]
---          , ["we", "wel"]
+          , ["we", "wel"]
           , ["hwenable", "hwmask"]
-          --, ["counter", "intr"]
+          , ["counter", "intr"]
           , ["counter"]
           , ["incrvalue", "incrwidth"]
           , ["decrvalue", "decrwidth"]

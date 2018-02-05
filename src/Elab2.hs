@@ -56,7 +56,6 @@ $(makeLenses ''ElabState)
 type ElabS = State ElabState
 
 data ReaderEnv = ReaderEnv {
-    _rext   :: Implementation,
     _scope  :: [Text],
     _syms   :: ST.SymTab (Expr SourcePos)
 }
@@ -65,7 +64,9 @@ makeLenses ''ReaderEnv
 
 getInstCache st = st ^. instCache
 logMsg t pos m = lift $ (msgs . t) %= (((T.pack . sourcePosPretty) pos <> " - " <> m):)
-getMsgs x = reverse $ (x ^. msgs . info) ++ (x ^. msgs . warn) ++ (x ^. msgs . err)
+getMsgs x = reverse $ ((x ^. msgs . info) & traverse %~ ("Info: " <>)) ++
+                      ((x ^. msgs . warn) & traverse %~ ("Warning: " <>)) ++
+                      ((x ^. msgs . err)  & traverse %~ ("Error: " <>))
 
 
 assignBits :: SourcePos -> Maybe Array -> Maybe (Fix ElabF) -> ReaderT ReaderEnv ElabS (Maybe (Fix ElabF))
@@ -109,6 +110,7 @@ pushDefs = lift (sprops %= \a@(x:xs) -> x:a)
 
 popDefs :: ReaderT ReaderEnv ElabS ()
 popDefs  = lift (sprops %= \(x:xs) -> xs)
+
 modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefault .= Just rhs)) [Signal, Field, Reg, Regfile, Addrmap]
 
 
@@ -163,10 +165,11 @@ instantiate (pos :< CompInst iext d n arr align) = do
 
   where
    addCache s (Just i) = do
-      lift $ instCache %= ST.add s n i
+      lift $ instCache %= ST.add s d i
       return (Just i)
    addCache s Nothing = return Nothing
 
+   setVisability _ Nothing = return Nothing
    setVisability dext (Just i)
      | iext == External || iext == Internal = (return . Just) (pushVisability iext i)
      | dext == External || dext == Internal = (return . Just) (pushVisability dext i)
@@ -231,9 +234,15 @@ elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
      Nothing -> return Nothing
    where
      cExclusive p Nothing = return Nothing
-     cExclusive p e = if isPropSet (fromJust e) p
-                      then do logMsg warn pos ("Property " <> prop <> " is mutually exclusive with " <> p <> ".  Unsetting " <> p <> ".")
-                              return $ e & _Just . _Fix . eprops . ix p .~ Nothing
+     cExclusive p e = if isPropActive (fromJust e) p
+                      then do logMsg warn pos ("Property " <> prop <> " is mutually exclusive with "
+                                                <> p <> ".  Unsetting " <> p <> ".")
+                              return $ e & _Just . _Fix . eprops . ix p .~
+                                case getPropType p of
+                                  Just PropBoolT -> Just (PropBool False)
+                                  Just PropIntrT -> Just (PropIntr NonSticky NonIntr)
+                                  _              -> Nothing
+
                       else return e
 
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
@@ -295,7 +304,7 @@ getDef syms scope def =
 elab (ti, syms) =
   map f ti
     where
-        env = ReaderEnv {_scope = [""], _syms = syms, _rext = NotSpec}
+        env = ReaderEnv {_scope = [""], _syms = syms}
         st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs], _instCache = M.empty}
         f x = runState (runReaderT (instantiate (pos :< CompInst NotSpec x x Nothing (Alignment Nothing Nothing Nothing))) env) st
 

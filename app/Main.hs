@@ -43,13 +43,16 @@ doit args = do
   case res of
      Nothing -> return ()
      Just r -> mapM_ f (elab r)
-  where f x = case x of
-               (Nothing, st) -> mapM_ (putStrLn . unpack) (getMsgs st)
-               (Just t, st) -> do
-                 mapM_ (putStrLn . unpack) (getMsgs st)
-                 putDoc $ verilog t
-                 when (isJust (svOutput  args)) (withFile (svName  (svOutput  args) t) WriteMode (flip hPutDoc (verilog t)))
-                 when (isJust (uvmOutput args)) (withFile (uvmName (uvmOutput args) t) WriteMode (flip hPutDoc (generateUVM . getInstCache $ st)))
+  where f x = do
+                 mapM_ (putStrLn . unpack) (getMsgs (snd x))
+                 case x of
+                  (Nothing, st) -> putStrLn "Errors found.  Exiting..."  >> return ()
+                  (Just t, st) -> do
+                    --putDoc $ verilog t
+                    when (isJust (svOutput  args))
+                         (withFile (svName  (svOutput  args) t) WriteMode (flip hPutDoc (verilog t)))
+                    when (isJust (uvmOutput args))
+                         (withFile (uvmName (uvmOutput args) t) WriteMode (flip hPutDoc (generateUVM . getInstCache $ st)))
         svName (Just args) t =
           case args of
             DefaultName     -> T.unpack $ (t ^. _Fix . ename) <> "_regs.sv"

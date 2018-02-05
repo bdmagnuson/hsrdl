@@ -320,7 +320,7 @@ pretty2text = renderStrict . P.layoutPretty P.defaultLayoutOptions
 
 fieldHWUpdate :: Fix ElabF -> Maybe (Fix VlogF)
 fieldHWUpdate f =
-   case (hwWritable, isIntrField f, isNotFalse f "we", isNotFalse f "wel") of
+   case (hwWritable, isIntrField f, isPropActive f "we", isPropActive f "wel") of
       (False,    _,     _,     _) -> Nothing
       (True,  True, False, False) -> Just maskedAssign
       (True,  True,  True, False) -> Just (vIf we  maskedAssign)
@@ -338,11 +338,6 @@ fieldHWUpdate f =
       hw_data = fn f <> "_wrdat"
       sticky = "_r_" <> fn f <> "_sticky"
 
-isNotFalse f p =
-   case f ^? _Fix . eprops . ix p . _Just of
-      Nothing -> False
-      Just (PropBool False) -> False
-      _ ->  True
 
 fieldSWUpdate :: Fix ElabF -> Fix ElabF -> [Maybe (Fix VlogF)]
 fieldSWUpdate r f =
@@ -514,7 +509,7 @@ f' p d = go p
 
 isHWReadable f   = getEnum f "hw" `elem` ["rw", "wr", "r"]
 isHWWritable f   = getEnum f "hw" `elem` ["rw", "wr", "w"] ||
-                   any (isNotFalse f) ["we", "wel"]
+                   any (isPropActive f) ["we", "wel"]
 isIntr f         = snd (getIntr f "intr") /= NonIntr
 isCounter f      = getBool f "counter"
 isUpCounter f    = getBool f "counter" && (anyIncrSet f || not (anyDecrSet f))
