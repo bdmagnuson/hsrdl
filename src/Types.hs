@@ -21,6 +21,7 @@ module Types (
  , IntrType (..)
  , AccessType (..)
  , AccessBehavior (..)
+ , Implementation (..)
  , _Fix
  , etype
  , ename
@@ -65,15 +66,17 @@ data PathElem = PathElem {
     array   :: Maybe Array
 } deriving (Show, Eq)
 
+data Implementation = Internal | External | NotSpec deriving (Show, Eq)
+
 data ExprF a =
      CompDef   {
-        ext    :: Maybe Bool,
+        ext    :: Implementation,
         ctype  :: CompType,
         name   :: Text,
         expr   :: [a]
      }
    | CompInst {
-        ext    :: Maybe Bool,
+        ext    :: Implementation,
         def    :: Text,
         name   :: Text,
         arr    :: Maybe Array,
@@ -197,7 +200,7 @@ data ElabF a = ElabF {
     _eoffset    :: Integer,
     _escope     :: [Text],
     _estride    :: Integer,
-    _eext       :: Bool
+    _eext       :: Implementation
 } deriving (Functor)
 
 

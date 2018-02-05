@@ -1,8 +1,14 @@
 # hsrdl
 
-hsrdl is a parser/generator for SRDL 1.0 register definition files.  The specification is available [here](http://www.accellera.org/images/downloads/standards/systemrdl/SystemRDL_2.0_Jan2018.pdf).
+hsrdl is a parser/generator for SRDL 1.0 register definition files.  The
+purpose of SRDL is do define hardware registers so that RTL can get be
+automatically generated along with consistant verification and sw collateral.
 
-The are two currently supported backends that emit Verilog implemeting the register definition and a UVM RAL package for integration into a testbench.
+The specification is available [here](http://www.accellera.org/images/downloads/standards/systemrdl/SystemRDL_2.0_Jan2018.pdf).
+
+The are two currently supported backends
+* Verilog RTL
+* UVM Register Access Layer
 
 # Example #
 ```
@@ -34,11 +40,10 @@ The above defines three registers.  The first is an ordinary read/write register
 
 # TODO #
 * Properties that support more than one type on RHS
-* More property assignment validation
-  * Post assigns to non dynamic properties
+* Catch post assigns to non dynamic properties
 * Catch field instances outside a Reg
-* Restore external interfaces
 * Signal components
+* Preprocessor directives
 
 ## Currently unsupported properties ##
 *    async

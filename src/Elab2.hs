@@ -5,6 +5,7 @@ module Elab2 (
      elab
    , getMsgs
    , getInstCache
+   , getSize
    ) where
 
 import Control.Monad.Identity
@@ -55,7 +56,7 @@ $(makeLenses ''ElabState)
 type ElabS = State ElabState
 
 data ReaderEnv = ReaderEnv {
-    _rext   :: Maybe Bool,
+    _rext   :: Implementation,
     _scope  :: [Text],
     _syms   :: ST.SymTab (Expr SourcePos)
 }
@@ -166,6 +167,13 @@ instantiate (pos :< CompInst iext d n arr align) = do
       return (Just i)
    addCache s Nothing = return Nothing
 
+   setVisability dext (Just i)
+     | iext == External || iext == Internal = (return . Just) (pushVisability iext i)
+     | dext == External || dext == Internal = (return . Just) (pushVisability dext i)
+     | otherwise = (return . Just) i
+       where
+         pushVisability ext i = i & (( _Fix . eext .~ ext) . ( _Fix . einst . traverse %~ pushVisability ext))
+
    arrInst (Just x) =
      case (x ^. _Fix . etype, arr) of
        (Field, _) -> assignBits pos arr (Just x)
@@ -177,12 +185,13 @@ instantiate (pos :< CompInst iext d n arr align) = do
    arrInst Nothing = return Nothing
 
    elabInst (sc, _ :< def) = do
+     env <- ask
      pushDefs
      when (ctype def == Reg) resetBits
      inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def))
      popDefs
-     return inst
-     where newenv = scope .~ (sc ++ [d])-- . (rext .~ isext)
+     setVisability (Types.ext def) inst
+     where newenv = (scope .~ (sc ++ [d]))
            initInst = do
              sp <- lift (use sprops)
              (return . Just . Fix) ElabF
@@ -195,7 +204,9 @@ instantiate (pos :< CompInst iext d n arr align) = do
                , _eoffset    = 0
                , _escope     = sc ++ [d]
                , _estride    = 0
-               , _eext       = False
+               , _eext       = if iext == External || Types.ext def == External
+                               then External
+                               else Internal
                }
 
 
@@ -284,9 +295,9 @@ getDef syms scope def =
 elab (ti, syms) =
   map f ti
     where
-        env = ReaderEnv {_scope = [""], _syms = syms, _rext = Nothing}
+        env = ReaderEnv {_scope = [""], _syms = syms, _rext = NotSpec}
         st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs], _instCache = M.empty}
-        f x = runState (runReaderT (instantiate (pos :< CompInst Nothing x x Nothing (Alignment Nothing Nothing Nothing))) env) st
+        f x = runState (runReaderT (instantiate (pos :< CompInst NotSpec x x Nothing (Alignment Nothing Nothing Nothing))) env) st
 
             where pos = extract $ getDef syms [""] x ^. _2
 

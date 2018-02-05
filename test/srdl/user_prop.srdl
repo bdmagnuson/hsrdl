@@ -11,7 +11,7 @@ addrmap test {
    reg realdef {
       default intr;
       regwidth = 32;
-      default hw = "rw";
+      //default hw = rw;
       field {intr;} a[2];
       field {reset = 4;} d[2];
       field {rclr;} c[7:6];
@@ -23,7 +23,7 @@ addrmap test {
       field {} f1;
    } reg2[4];
 
-   reg2[3].f1->hw = "rw";
+   reg2[3].f1->hw = rw;
    reg2[3].f1->we = true;
 
    regfile {

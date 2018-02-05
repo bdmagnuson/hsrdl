@@ -29,9 +29,11 @@ import Props
 import Types
 
 data ExtInfo = ExtInfo {
-  _xbase :: Integer,
-  _xlast :: Integer,
-  _xname :: Text
+  _xisext  :: Implementation,
+  _xshared :: Bool,
+  _xbase   :: Integer,
+  _xlast   :: Integer,
+  _xname   :: Text
 }
 
 makeLenses ''ExtInfo
@@ -61,42 +63,34 @@ safeGetIntr = safeGetProp _PropIntr
 safeGetRef  = safeGetProp _PropRef
 safeGetLit  = safeGetProp _PropLit
 
-
-getPropF t e p =
-  case e ^? eprops . ix p . _Just . t of
-    Just b -> b
-    _ -> error "you dun f'd up"
-
-getBoolF = getPropF _PropBool
-getNumF  = getPropF _PropNum
-getEnumF = getPropF _PropEnum
-getLitF  = getPropF _PropLit
+data ExtTree a = Leaf ExtInfo | Node ExtInfo [a] deriving (Functor)
 
 filterExt :: Fix ElabF -> [ExtInfo]
-filterExt = cata f
-  where f a = 
-          case a ^. etype of
-            Field -> []
-            Array -> childRanges
-            otherwise ->
-              if getBoolF a "sharedextbus"
-              then
-                case (minimumOf (traverse . xbase) childRanges,
-                      maximumOf (traverse . xlast) childRanges) of
-                       (Nothing, _) -> []
-                       (_, Nothing) -> []
-                       (Just b, Just l) -> [ExtInfo {_xbase = b, _xlast = l, _xname = a ^. ename}]
-              else
-                case (a ^. etype, a ^. eext) of
-                  (Reg, False) -> []
-                  (Reg, True) -> [ExtInfo {_xbase = l, _xlast = l, _xname = a ^. ename}]
-                  otherwise -> childRanges
-            where
-              childRanges = map (over xname (combine (a ^. etype) (a ^. ename))) (concat (a ^. einst))
-              l = a ^. eoffset
-              combine Addrmap n = id
-              combine Array n = (n <>)
-              combine _ n = ((n <> "_") <>)
+filterExt x = filter (\x -> x ^. xisext == External) (hylo foldExt unfoldExt x)
+  where
+    unfoldExt e = if e ^. _Fix . etype == Reg
+                  then Leaf info
+                  else Node info (e ^. _Fix . einst)
+      where
+        info = ExtInfo
+               { _xisext  = e ^. _Fix . eext
+               , _xshared = getBool e "sharedextbus"
+               , _xbase   = e ^. _Fix . eoffset
+               , _xlast   = e ^. _Fix . eoffset + getSize e
+               , _xname   = fn e
+               }
+
+    foldExt (Leaf e) = [e]
+    foldExt (Node e i) =
+       case (e ^. xisext, e ^. xshared) of
+         (External,    _) -> [e]
+         (       _, True) -> if length i == 0
+                             then []
+                             else [e { _xbase = fromJust $ minimumOf (traverse . xbase) (concat i)
+                                     , _xlast = fromJust $ maximumOf (traverse . xlast) (concat i)}]
+         (      _, False) -> concat i
+
+
 
 fqName :: Fix ElabF -> State [(CompType, Text)] (Fix ElabF)
 fqName e = do
@@ -141,7 +135,7 @@ addExt :: [ExtInfo] -> [VIO] -> [VIO]
 addExt = flip (foldl go)
   where go io e = [ VIO Output ((e ^. xname) <> "_rd") 1
                   , VIO Output ((e ^. xname) <> "_wr") 1
-                  , VIO Output ((e ^. xname) <> "_addr") (clog2 (e ^. xlast - e ^. xbase))
+                  , VIO Output ((e ^. xname) <> "_addr") (clog2 (e ^. xlast - e ^. xbase + 1))
                   , VIO Input  ((e ^. xname) <> "_wdata") 32
                   , VIO Input  ((e ^. xname) <> "_rdata") 32
                   , VIO Input  ((e ^. xname) <> "_ack") 1
@@ -190,7 +184,7 @@ always @(*) begin : _readMux
     endcase
 
 %{forall e <- es}
-    if (addr >= #{e ^. xbase}) && (addr <= #{e ^. xlast})
+    if ((addr >= #{e ^. xbase}) && (addr <= #{e ^. xlast})) begin
        #{e ^. xname}_acc = 1'b1;
        _v_err = 1'b0;
        _v_ack = 1'b0;
@@ -200,7 +194,7 @@ always @(*) begin : _readMux
     case (1'b1)
 %{forall r <- rs}
        #{fn r}_acc : begin
-%{forall f <- getElem isField FilterInternal r}
+%{forall f <- getElem isField Internal r}
           _v_rdata[#{getNumProp "msb" f}:#{getNumProp "lsb" f}] = #{fn f};
 %{endforall}
        end
@@ -238,10 +232,14 @@ always @(posedge clk or negedge rst_l) begin
 %{endif}
 %{endforall}
 %{forall e <- es}
-    #{e ^. xname}_rd <= rd && #{e ^. xname}_acc;
-    #{e ^. xname}_wr <= wr && #{e ^. xname}_acc;
-    if (#{e ^. xname}_acc)
+    #{e ^. xname}_rd <= rd && _readMux.#{e ^. xname}_acc;
+    #{e ^. xname}_wr <= wr && _readMux.#{e ^. xname}_acc;
+    if (_readMux.#{e ^. xname}_acc)
        #{e ^. xname}_addr <= addr - #{e ^. xbase};
+    if (#{e ^. xname}_ack) begin
+      ack <= 1'b1;
+      rdata <= #{e ^. xname}_rdata;
+    end
 %{endforall}
   end
 end
@@ -320,11 +318,9 @@ combUpdate rs = P.vcat (map goR rs)
 
 pretty2text = renderStrict . P.layoutPretty P.defaultLayoutOptions
 
-sfix' f s = f ^. _Fix . ename <> "_" <> s
-
 fieldHWUpdate :: Fix ElabF -> Maybe (Fix VlogF)
 fieldHWUpdate f =
-   case (hwWritable, isIntrField f, getBoolProp "we" f, getBoolProp "wel" f) of
+   case (hwWritable, isIntrField f, isNotFalse f "we", isNotFalse f "wel") of
       (False,    _,     _,     _) -> Nothing
       (True,  True, False, False) -> Just maskedAssign
       (True,  True,  True, False) -> Just (vIf we  maskedAssign)
@@ -334,13 +330,19 @@ fieldHWUpdate f =
       (True, False, False,  True) -> Just (vIf wel assign)
    where
       hwWritable = getEnum f "hw" `elem` ["rw", "wr", "w"]
-      we  = vStmt $ sfix' f "we"
-      wel = vStmt $ "!" <> sfix' f "wel"
+      we  = vStmt $ getLit f "we"
+      wel = vStmt $ "!" <> getLit f "wel"
       assign = bAssign "next" hw_data
       maskedAssign = bAssign "next" ("(next & " <> sticky <> ") | (" <> 
                                      hw_data <> " & ~" <> sticky <> ")")
       hw_data = fn f <> "_wrdat"
       sticky = "_r_" <> fn f <> "_sticky"
+
+isNotFalse f p =
+   case f ^? _Fix . eprops . ix p . _Just of
+      Nothing -> False
+      Just (PropBool False) -> False
+      _ ->  True
 
 fieldSWUpdate :: Fix ElabF -> Fix ElabF -> [Maybe (Fix VlogF)]
 fieldSWUpdate r f =
@@ -512,7 +514,7 @@ f' p d = go p
 
 isHWReadable f   = getEnum f "hw" `elem` ["rw", "wr", "r"]
 isHWWritable f   = getEnum f "hw" `elem` ["rw", "wr", "w"] ||
-                   any (isPropSet f) ["we", "wel"]
+                   any (isNotFalse f) ["we", "wel"]
 isIntr f         = snd (getIntr f "intr") /= NonIntr
 isCounter f      = getBool f "counter"
 isUpCounter f    = getBool f "counter" && (anyIncrSet f || not (anyDecrSet f))
@@ -528,14 +530,15 @@ convertProps e = do
   let e' = e & _Fix . einst .~ ni
   np <- M.traverseWithKey inspectProp (e' ^. _Fix . eprops)
   let e'' = e' & _Fix . eprops .~ np
-  mapM_ (uncurry when)
-    [ (isField e && isHWReadable e'', addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
-    , (isField e && isHWWritable e'', addIO $ VIO Input (fn e <> "_wrdat") (getNum e "fieldwidth"))
-    , (isField e && not (isHWReadable e''), addIO $ VIO InternalReg (fn e) (getNum e "fieldwidth"))
-    , (isReg e   && isIntrReg e'',    addIO $ VIO Output (fn e <> "_intr") 1)
-    , (isField e && isIntrField e'',    addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
-    , (isReg e   && isHaltReg e'',    addIO $ VIO Output (fn e <> "_halt") 1)
-    ]
+  when (e'' ^. _Fix . eext == Internal) $
+     mapM_ (uncurry when)
+       [ (isField e && isHWReadable e'', addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
+       , (isField e && isHWWritable e'', addIO $ VIO Input (fn e <> "_wrdat") (getNum e "fieldwidth"))
+       , (isField e && not (isHWReadable e''), addIO $ VIO InternalReg (fn e) (getNum e "fieldwidth"))
+       , (isReg e   && isIntrReg e'',    addIO $ VIO Output (fn e <> "_intr") 1)
+       , (isField e && isIntrField e'',    addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
+       , (isReg e   && isHaltReg e'',    addIO $ VIO Output (fn e <> "_halt") 1)
+       ]
   return e''
   where inspectProp :: Text -> Maybe PropRHS -> State [VIO] (Maybe PropRHS)
         inspectProp k v =
@@ -601,22 +604,20 @@ pushPostProp e = foldl (.) id (map f $ e ^. _Fix . epostProps)
 isReg e   = e ^. _Fix . etype == Reg
 isField e = e ^. _Fix . etype == Field
 
-getElem :: (Fix ElabF -> Bool) -> RegsFilter -> Fix ElabF -> [Fix ElabF]
-getElem t fe e =
-  if t e
-    then case fe of
-      FilterNone -> [e]
-      FilterInternal -> if e ^. _Fix . eext then [] else [e]
-      FilterExternal -> if e ^. _Fix . eext then [e] else []
-    else
-      concatMap (getElem t fe) (e ^. _Fix . einst)
 
-getFields = getElem isField FilterNone
+getElem :: (Fix ElabF -> Bool) -> Implementation -> Fix ElabF -> [Fix ElabF]
+getElem t fe e =
+    case (t e, fe == NotSpec || fe == e ^. _Fix . eext) of
+       (True, True)  -> [e]
+       (True, False) -> []
+       (False,    _) -> concatMap (getElem t fe) (e ^. _Fix . einst)
+
+getFields = getElem isField NotSpec
 
 verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) (addExt es io), wires io, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
-   where rs = getElem isReg FilterInternal x''
-         fs = getElem isField FilterInternal x''
-         es = []--filterExt x'
+   where rs = getElem isReg   Internal x''
+         fs = getElem isField Internal x''
+         es = filterExt x'
          x'  = (pushPostProp . pushOffset 0) (evalState (fqName x) [])
          (x'', io) = runState (convertProps x') initIO
 

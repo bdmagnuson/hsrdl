@@ -33,6 +33,7 @@ import Data.Text (Text)
 import Data.Monoid ((<>))
 import Data.Maybe (fromMaybe, isJust, fromJust)
 import Control.Monad (msum)
+import Debug.Trace
 
 import Types
 
@@ -210,9 +211,8 @@ getBoolProp :: Text -> Fix ElabF -> Bool
 getBoolProp k e =
    case e ^? _Fix . eprops . ix k of
       Just (Just (PropBool n)) -> n
-      Just _ -> error $ T.unpack (k <> " is not a boolean property")
+      Just a -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, k)) (error "you dun f'd up")
       Nothing -> error $ T.unpack (k <> " is not a valid property")
-
 
 getEnumProp :: Text -> Fix ElabF -> Text
 getEnumProp k e =

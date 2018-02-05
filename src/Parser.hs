@@ -35,7 +35,7 @@ data ParseLoc =
 data ParseState = ParseState {
     loc      :: ParseLoc,
     nam      :: Text,
-    ext      :: Maybe Bool,
+    ext      :: Implementation,
     anonIdx  :: Int,
     syms     :: S.SymTab (Expr SourcePos),
     topInst  :: [Text],
@@ -139,7 +139,7 @@ addTopDef c name = do
 
 parseCompDef = do
    pos   <- getPosition
-   ext   <- optional (parseRsvdRet "external" True <|> parseRsvdRet "internal" False)
+   ext   <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)
    cType <- parseCompType
    name  <- parseCompName
    expr  <- withReaderT (\s -> s {level = level s + 1, scope = scope s ++ [name]}) $ braces $ many parseExpr
@@ -167,7 +167,7 @@ parseRsvdRet a b = do
 
 parseExpCompInst = do
    pos  <- getPosition
-   ext' <- optional (parseRsvdRet "external" True <|> parseRsvdRet "internal" False)
+   ext' <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)
    inst <- parseIdentifier
    lift (modify $ \s -> s { loc = ANON_DEF, nam = inst, Parser.ext = ext' })
    parseExpr
@@ -319,7 +319,7 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" Nothing 0 M.empty [] [])
+pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" NotSpec 0 M.empty [] [])
 
 hsrdlParseFile file = do
    f <- Data.Text.IO.readFile file
