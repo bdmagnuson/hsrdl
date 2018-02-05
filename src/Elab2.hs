@@ -118,7 +118,7 @@ getSize x =
  case x ^. _Fix . etype of
    Field -> 0
    Reg   -> getNumProp "regwidth" x `div` 8
-   otherwise -> case maximumByOf traverse (\x y -> compare (x ^. _Fix . eoffset) (y ^. _Fix . eoffset)) (x ^. _Fix . einst) of
+   _ -> case maximumByOf traverse (\x y -> compare (x ^. _Fix . eoffset) (y ^. _Fix . eoffset)) (x ^. _Fix . einst) of
                   Nothing -> 0
                   Just e -> e ^. _Fix . eoffset + getSize e
 
@@ -184,7 +184,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
           let newinst = x & _Fix . ealign .~ Alignment Nothing Nothing Nothing
           in return $ Just $ x & _Fix . etype  .~ Array
                                & _Fix . einst  .~ zipWith (\x y -> y & _Fix . ename .~ (T.pack . show) x) [0..(w-1)] (repeat newinst)
-       otherwise -> return (Just x)
+       _ -> return (Just x)
    arrInst Nothing = return Nothing
 
    elabInst (sc, _ :< def) = do
@@ -194,7 +194,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
      inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def))
      popDefs
      setVisability (Types.ext def) inst
-     where newenv = (scope .~ (sc ++ [d]))
+     where newenv = scope .~ (sc ++ [d])
            initInst = do
              sp <- lift (use sprops)
              (return . Just . Fix) ElabF
@@ -296,10 +296,8 @@ cType pos prop rhs (Just x) =
 cType _ _ _ Nothing = return Nothing
 
 
-getDef syms scope def =
-  case ST.lkup syms scope def of
-    Just s -> s
-    Nothing -> error $ T.unpack ("No instance" <> def)
+getDef syms scope def = fromMaybe (error $ T.unpack ("No instance" <> def))
+                                  (ST.lkup syms scope def)
 
 elab (ti, syms) =
   map f ti

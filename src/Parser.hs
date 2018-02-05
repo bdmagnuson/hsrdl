@@ -227,7 +227,7 @@ parsePropAssign' = do
    pos  <- getPosition
    d    <- optional (join parseRsvdRet "default")
    prop <- parseIdentifier'
-   rhs  <- option (PropBool True) (equal *> (parseRHS prop))
+   rhs  <- option (PropBool True) (equal *> parseRHS prop)
    semi
    case d of
      Nothing -> return $ pos :< PropAssign [] prop rhs
@@ -250,7 +250,7 @@ parseAlign = do
  (at, mod, stride) <- makePermParser $ (,,) <$?> (Nothing, p1) <|?> (Nothing, p2) <|?> (Nothing, p3)
  case (at, mod, stride) of
    (Just _, Just _, _) -> fail "@ and %= operators are mutualy exclusive"
-   otherwise -> return $ Alignment at mod stride
+   _ -> return $ Alignment at mod stride
  where
     p1 = do a <- char '@' *> parseNumeric; return (Just a)
     p2 = do a <- symbol "%=" *> parseNumeric; return (Just a)
