@@ -1,74 +1,50 @@
-{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Monad
-import Debug.Trace
-
-import Parser
-import Elab2
-import Backends.UVM
-import Backends.Verilog
-import Data.Maybe (fromJust)
-
-import Data.Text (unpack, pack)
-
-import System.IO
-import Control.Lens
-
-import qualified Data.Text.Prettyprint.Doc.Render.Text
-import Data.Text.Prettyprint.Doc.Render.Text
-import qualified Data.Map.Strict as M
-import Control.Monad.State
-import Debug.Trace
+import Control.Monad.Identity
 import Options.Applicative
-import qualified Data.Text as T
+import Data.Text (unpack)
+import Data.Maybe (fromMaybe)
 import Data.Monoid ((<>))
-import Data.Maybe (isJust)
-import Types (ename, _Fix)
+import qualified Data.List as L
+import qualified Data.Map.Strict as M
+import qualified Text.Megaparsec as P
 
-data OutputArg =
-     DefaultName
-   | SpecifiedName String
+import Language.SRDL
 
 data Args = Args
   { input     :: String
   , outputDir :: String
-  , svOutput  :: Maybe OutputArg
-  , uvmOutput :: Maybe OutputArg
+  , svOutput  :: Bool
+  , uvmOutput :: Bool
+  , svFile    :: [(String, String)]
+  , uvmFile   :: [(String, String)]
   }
 
 doit :: Args -> IO ()
 doit args = do
-  res <- parseFile (input args)
-  case res of
-     Nothing -> return ()
-     Just r -> mapM_ f (elab r)
-  where f x = do
-                 mapM_ (putStrLn . unpack) (getMsgs (snd x))
-                 case x of
-                  (Nothing, st) -> putStrLn "Errors found.  Exiting..."  >> return ()
-                  (Just t, st) -> do
-                    --putDoc $ verilog t
-                    when (isJust (svOutput  args))
-                         (withFile (svName  (svOutput  args) t) WriteMode (flip hPutDoc (verilog t)))
-                    when (isJust (uvmOutput args))
-                         (withFile (uvmName (uvmOutput args) t) WriteMode (flip hPutDoc (generateUVM . getInstCache $ st)))
-        svName (Just args) t =
-          case args of
-            DefaultName     -> T.unpack $ (t ^. _Fix . ename) <> "_regs.sv"
-            SpecifiedName n -> n
-        uvmName (Just args) t =
-          case args of
-            DefaultName     -> T.unpack $ (t ^. _Fix . ename) <> "_uvm_regs.sv"
-            SpecifiedName n -> n
+  srdl <- readSRDL (input args)
+  mapM_ f (M.toList srdl)
+  where f (n, s) = do
+             when (svOutput  args) $ writeVerilog (oName (unpack n) (svFile args) "_regs.sv") s
+             when (uvmOutput args) $ writeUVM     (oName (unpack n) (uvmFile args) "_uvm_regs.sv") s
+        oName n m s = fromMaybe (n ++ s) (L.lookup n m)
 
 main :: IO ()
 main = doit =<< execParser (info opts fullDesc)
   where
     opts = Args <$> strOption (long "input" <> metavar "INPUT" <> help "Input SRDL file")
                 <*> strOption (long "output" <> metavar "DIR" <> help "Output directory" <> value ".")
-                <*> (optional $ (     (SpecifiedName <$> strOption (long "svfile"  <> metavar "FILE" <> help "SV"))
-                                  <|> (flag' DefaultName  (long "sv"  <> help "SV"))))
-                <*> (optional $ (     (SpecifiedName <$> strOption (long "uvmfile" <> metavar "FILE" <> help "UVM"))
-                                  <|> (flag' DefaultName  (long "uvm" <> help "UVM"))))
+                <*> switch (long "sv")
+                <*> switch (long "uvm")
+                <*> (many ((option fileOption) (long "svfile"  <> metavar "MAP:FILE" <> help "SV")))
+                <*> (many ((option fileOption) (long "uvmfile"  <> metavar "MAP:FILE" <> help "SV")))
+    fileOption = maybeReader (P.parseMaybe p)
+    p :: P.ParsecT P.Dec String Identity (String, String)
+    p = do
+       n <- some (P.alphaNumChar <|> P.char '_')
+       _ <- P.char ':'
+       f <- some (P.alphaNumChar <|> P.char '.' <|> P.char '_')
+       return (n, f)
+
+
 

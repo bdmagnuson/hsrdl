@@ -15,7 +15,14 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Elab2,Parser,Props,SymbolTable,Types,Backends.UVM,Backends.Verilog
+  exposed-modules:     Language.SRDL.Elab2
+                     , Language.SRDL.Parser
+                     , Language.SRDL.Props
+                     , Language.SRDL.SymbolTable
+                     , Language.SRDL.Types
+                     , Language.SRDL.Backends.UVM
+                     , Language.SRDL.Backends.Verilog
+                     , Language.SRDL
   build-depends:       base >= 4.7 && < 5
                      , containers
                      , megaparsec
@@ -39,9 +46,8 @@ executable hsrdl-exe
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , hsrdl
+                     , megaparsec
                      , text
-                     , lens
-                     , prettyprinter
                      , containers
                      , mtl
                      , optparse-applicative

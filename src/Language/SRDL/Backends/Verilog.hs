@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Backends.Verilog
+module Language.SRDL.Backends.Verilog
   ( verilog
   ) where
 
@@ -24,9 +24,9 @@ import Text.Show.Deriving
 import Debug.Trace
 import Data.Maybe (catMaybes, fromMaybe, isJust, fromJust)
 
-import Elab2
-import Props
-import Types
+import Language.SRDL.Elab2
+import Language.SRDL.Props
+import Language.SRDL.Types
 
 data ExtInfo = ExtInfo {
   _xisext  :: Implementation,

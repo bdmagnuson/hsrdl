@@ -1,11 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Elab2 (
+module Language.SRDL.Elab2 (
      elab
    , getMsgs
    , getInstCache
    , getSize
+   , ElabState
    ) where
 
 import Control.Monad.Identity
@@ -22,14 +23,15 @@ import qualified Data.Set as S
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
 import Debug.Trace
 
-import SymbolTable as ST
 import Data.Functor.Foldable
 import Data.Maybe (isJust, fromMaybe, fromJust)
-import Props
-import Parser
-import Types
 import qualified Data.Text as T
 import Data.Text (Text)
+
+import Language.SRDL.Props
+import Language.SRDL.Parser
+import Language.SRDL.Types
+import qualified Language.SRDL.SymbolTable as ST
 
 
 data Msgs = Msgs {
@@ -193,7 +195,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
      when (ctype def == Reg) resetBits
      inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def))
      popDefs
-     setVisability (Types.ext def) inst
+     setVisability (ext def) inst
      where newenv = scope .~ (sc ++ [d])
            initInst = do
              sp <- lift (use sprops)
@@ -207,7 +209,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
                , _eoffset    = 0
                , _escope     = sc ++ [d]
                , _estride    = 0
-               , _eext       = if iext == External || Types.ext def == External
+               , _eext       = if iext == External || ext def == External
                                then External
                                else Internal
                }

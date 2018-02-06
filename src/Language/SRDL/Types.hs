@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
-module Types (
+module Language.SRDL.Types (
    ExprF(..)
  , Expr
  , Alignment (..)

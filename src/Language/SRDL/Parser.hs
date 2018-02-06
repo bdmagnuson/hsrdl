@@ -1,8 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Parser (
-       parseFile
+module Language.SRDL.Parser (
+       parseSRDL
      ) where
 
 import Control.Monad
@@ -24,9 +24,9 @@ import Data.Text (Text, empty)
 import Data.Monoid ((<>))
 import Debug.Trace
 
-import Props
-import Types hiding (ElabF)
-import qualified SymbolTable as S
+import Language.SRDL.Props
+import Language.SRDL.Types hiding (ElabF)
+import qualified Language.SRDL.SymbolTable as S
 
 data ParseLoc =
       CHILD
@@ -35,7 +35,7 @@ data ParseLoc =
 data ParseState = ParseState {
     loc      :: ParseLoc,
     nam      :: Text,
-    ext      :: Implementation,
+    pext     :: Implementation,
     anonIdx  :: Int,
     syms     :: S.SymTab (Expr SourcePos),
     topInst  :: [Text],
@@ -169,7 +169,7 @@ parseExpCompInst = do
    pos  <- getPosition
    ext' <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)
    inst <- parseIdentifier
-   lift (modify $ \s -> s { loc = ANON_DEF, nam = inst, Parser.ext = ext' })
+   lift (modify $ \s -> s { loc = ANON_DEF, nam = inst, pext = ext' })
    parseExpr
 
 parseCompInst = do
@@ -180,7 +180,7 @@ parseCompInst = do
    arr   <- optional parseArray
    align <- parseAlign
    _     <- f $ S.lkup (syms s) (scope env) (nam s)
-   return $ pos :< CompInst (Parser.ext s) (nam s) name arr align
+   return $ pos :< CompInst (pext s) (nam s) name arr align
         where f (Just ([empty], _ :< CompDef _ t n _)) = do when (t == Addrmap) (lift (modify (\s -> s {topInst = filter (/= n) (topInst s)})))
                                                             return ()
               f _ = return ()
@@ -325,7 +325,7 @@ hsrdlParseFile file = do
    f <- Data.Text.IO.readFile file
    runParserT pp file f
 
-parseFile file = do
+parseSRDL file = do
   p <- hsrdlParseFile file
   case p of
     Left err -> do

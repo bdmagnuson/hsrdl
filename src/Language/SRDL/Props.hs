@@ -2,7 +2,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-module Props (
+module Language.SRDL.Props (
        defDefs
      , getPropType
      , checktype
@@ -36,7 +36,7 @@ import Data.Maybe (fromMaybe, isJust, fromJust)
 import Control.Monad (msum)
 import Debug.Trace
 
-import Types
+import Language.SRDL.Types
 
 typeOf :: PropRHS -> PropType
 typeOf (PropNum  _)    = PropNumT

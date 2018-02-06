@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
-module SymbolTable (
+module Language.SRDL.SymbolTable (
       lkup,
       add,
       SymTab

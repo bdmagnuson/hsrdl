@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Backends.UVM
+module Language.SRDL.Backends.UVM
   ( generateUVM
   ) where
 
@@ -18,9 +18,9 @@ import Data.List (partition, sortBy)
 import Data.Ord (comparing)
 import Data.Function (on)
 
-import qualified SymbolTable as ST
-import Types
-import Props
+import qualified Language.SRDL.SymbolTable as ST
+import Language.SRDL.Types
+import Language.SRDL.Props
 
 generateUVM :: ST.SymTab (Fix ElabF) -> P.Doc Text
 generateUVM e = P.vcat $ map f (sortBy (flip (comparing T.length) `on` fst) (M.toList e))
