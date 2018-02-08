@@ -163,7 +163,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
                              logMsg err pos ("Unknown definition: " <> d <> " in " <> mconcat (env ^. scope))
                              return Nothing
                  Just  def -> elabInst def >>= calcOffsets >>= addCache (env ^. scope) >>= arrInst
-    Just (_, a) -> arrInst (Just a) >>= calcOffsets
+    Just (_, a) -> arrInst (Just (a & _Fix . ename .~ n)) >>= calcOffsets
 
   where
    addCache s (Just i) = do

@@ -8,6 +8,8 @@ import Data.Monoid ((<>))
 import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Text.Megaparsec as P
+import qualified Text.Megaparsec.Char as L
+import Data.Void
 
 import Language.SRDL
 
@@ -39,11 +41,11 @@ main = doit =<< execParser (info opts fullDesc)
                 <*> (many ((option fileOption) (long "svfile"  <> metavar "MAP:FILE" <> help "SV")))
                 <*> (many ((option fileOption) (long "uvmfile"  <> metavar "MAP:FILE" <> help "SV")))
     fileOption = maybeReader (P.parseMaybe p)
-    p :: P.ParsecT P.Dec String Identity (String, String)
+    p :: P.ParsecT (P.ErrorFancy Void) String Identity (String, String)
     p = do
-       n <- some (P.alphaNumChar <|> P.char '_')
-       _ <- P.char ':'
-       f <- some (P.alphaNumChar <|> P.char '.' <|> P.char '_')
+       n <- some (L.alphaNumChar <|> L.char '_')
+       _ <- L.char ':'
+       f <- some (L.alphaNumChar <|> L.char '.' <|> L.char '_')
        return (n, f)
 
 
