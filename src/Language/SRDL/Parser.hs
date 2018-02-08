@@ -9,9 +9,9 @@ import Control.Monad
 import Control.Comonad
 import Control.Comonad.Cofree
 import Text.Megaparsec hiding (State)
-import Text.Megaparsec.Text
 import Text.Megaparsec.Perm
-import qualified Text.Megaparsec.Lexer as L
+import Text.Megaparsec.Char
+import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Data.Map.Strict as M
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
@@ -23,6 +23,7 @@ import qualified Data.Text as T
 import Data.Text (Text, empty)
 import Data.Monoid ((<>))
 import Debug.Trace
+import Data.Void
 
 import Language.SRDL.Props
 import Language.SRDL.Types hiding (ElabF)
@@ -42,7 +43,7 @@ data ParseState = ParseState {
     input    :: [Text]
 } deriving (Show)
 
-type SrdlParser = ReaderT ReaderEnv (StateT ParseState (ParsecT Dec Text IO))
+type SrdlParser = ReaderT ReaderEnv (StateT ParseState (ParsecT (ErrorFancy Void) Text IO))
 
 sc = L.space (void spaceChar) lineCmnt blockCmnt
   where lineCmnt  = L.skipLineComment "//"
@@ -78,7 +79,7 @@ data ReaderEnv = ReaderEnv {
 }
 
 rword :: Text -> SrdlParser ()
-rword w = lexeme $ string (T.unpack w) *> notFollowedBy alphaNumChar *> sc
+rword w = lexeme $ string w *> notFollowedBy alphaNumChar *> sc
 
 braces = between lbrace rbrace
 
@@ -283,7 +284,7 @@ parseNumeric = lexeme L.decimal
 parseRHS :: Text -> SrdlParser PropRHS
 parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit <|> parseRef
    where parseLit = do
-            a <- between dquote dquote (many (Text.Megaparsec.noneOf ("\"" :: String)))
+            a <- between dquote dquote (many (noneOf ("\"" :: String)))
             return $ PropLit (T.pack a)
          parseNum = do
             a <- parseNumeric
