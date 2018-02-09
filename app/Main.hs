@@ -5,6 +5,7 @@ import Options.Applicative
 import Data.Text (unpack)
 import Data.Maybe (fromMaybe)
 import Data.Monoid ((<>))
+import Data.Void
 import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Text.Megaparsec as P
@@ -27,7 +28,7 @@ doit args = do
   srdl <- readSRDL (input args)
   mapM_ f (M.toList srdl)
   where f (n, s) = do
-             when (svOutput  args) $ writeVerilog (oName (unpack n) (svFile args) "_regs.sv") s
+             when (svOutput  args) $ writeVerilog (oName (unpack n) (svFile args) "_regs.sv")  s
              when (uvmOutput args) $ writeUVM     (oName (unpack n) (uvmFile args) "_uvm_regs.sv") s
         oName n m s = fromMaybe (n ++ s) (L.lookup n m)
 

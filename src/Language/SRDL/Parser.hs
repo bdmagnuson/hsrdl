@@ -1,17 +1,20 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.SRDL.Parser (
        parseSRDL
      ) where
 
+import Data.Proxy
+import Debug.Trace
 import Control.Monad
 import Control.Comonad
 import Control.Comonad.Cofree
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Perm
-import Text.Megaparsec.Char
-import qualified Text.Megaparsec.Char.Lexer as L
+--import Text.Megaparsec.Char hiding (string)
 import qualified Data.Map.Strict as M
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
@@ -19,15 +22,20 @@ import Control.Monad.Trans.Class
 import Data.Text.IO (readFile)
 import Control.Monad.IO.Class
 
+--import qualified Text.Megaparsec.Char.Lexer as L hiding (symbol)
+import qualified Language.SRDL.SpanLexer as L
+
 import qualified Data.Text as T
 import Data.Text (Text, empty)
+import Data.Void
 import Data.Monoid ((<>))
 import Debug.Trace
-import Data.Void
+import Data.Maybe (fromJust)
 
 import Language.SRDL.Props
 import Language.SRDL.Types hiding (ElabF)
 import qualified Language.SRDL.SymbolTable as S
+import Language.SRDL.Stream
 
 data ParseLoc =
       CHILD
@@ -43,27 +51,33 @@ data ParseState = ParseState {
     input    :: [Text]
 } deriving (Show)
 
-type SrdlParser = ReaderT ReaderEnv (StateT ParseState (ParsecT (ErrorFancy Void) Text IO))
+type SrdlParser = ReaderT ReaderEnv (StateT ParseState (ParsecT (ErrorFancy Void) [Span] IO))
 
-sc = L.space (void spaceChar) lineCmnt blockCmnt
-  where lineCmnt  = L.skipLineComment "//"
-        blockCmnt = L.skipBlockComment "/*" "*/"
+sc = L.space (void L.spaceChar) lineCmnt blockCmnt
+  where lineCmnt  = L.skipLineComment [(ip "//")]
+        blockCmnt = L.skipBlockComment [(ip "/*")] [(ip "*/")]
+
+ip :: Text -> Span
+ip x = Span (initialPos "") (initialPos "") x
+
+symbol x = L.lexeme sc (L.string [(ip x)])
 
 lbrace = symbol "{"
 rbrace = symbol "}"
-semi   = symbol ";"
 comma  = symbol ","
 dot    = symbol "."
 dref   = symbol "->"
 equal  = symbol "="
 pipe   = symbol "|"
 dquote = symbol "\""
+semi   = symbol ";"
 
-lexeme = L.lexeme sc
+tcat x = T.concat (map spanBody x)
+
 
 identifier = do
-  foo <- lexeme $ (:) <$> letterChar <*> many (alphaNumChar <|> char '_')
-  return (T.pack foo)
+  foo <- L.lexeme sc $ (:) <$> L.letterChar <*> many (L.alphaNumChar <|> L.char '_')
+  return $ T.concat (map spanBody foo)
 
 parseIdentifier' = identifier
 parseIdentifier  = do
@@ -71,7 +85,6 @@ parseIdentifier  = do
   when (id `elem` rws) (fail (T.unpack $ "Can't use reserved word '" <> id <> "' as identifier"))
   return id
 
-symbol = L.symbol sc
 
 data ReaderEnv = ReaderEnv {
     scope :: [Text],
@@ -79,20 +92,22 @@ data ReaderEnv = ReaderEnv {
 }
 
 rword :: Text -> SrdlParser ()
-rword w = lexeme $ string w *> notFollowedBy alphaNumChar *> sc
+rword w = symbol w *> return ()
+
 
 braces = between lbrace rbrace
+braces' = between lbrace rbrace
 
 
 parseTop = do
     pos <- getPosition
-    e <- many parseExpr
+    e   <- many parseExpr
     return $ pos :< TopExpr e
 
 parseExpr :: SrdlParser (Expr SourcePos)
 parseExpr = do
    st <- lift get
-   void $ optional (try parseInclude)
+--   void $ optional (try parseInclude)
    e <- case loc st of
           ANON_DEF -> parseCompInst <* choice [c, s]
             where
@@ -106,25 +121,25 @@ parseExpr = do
             <|> parsePropAssign
             <|> parsePropDef
             <|> parseExpCompInst
-   end <- option False (True <$ hidden eof)
-   s <- lift get
-   when (end && (input s /= [])) $ do
-                                  popPosition
-                                  setInput (head $ input s)
-                                  lift (modify (\s -> s {input = tail (input s)}))
+--   end <- option False (True <$ hidden eof)
+--   s <- lift get
+--   when (end && (input s /= [])) $ do
+--                                  popPosition
+--                                  setInput (head $ input s)
+--                                  lift (modify (\s -> s {input = tail (input s)}))
    return e
 
 
-parseInclude = do
-   rword "`include"
-   file <- between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_'))
-   s <- liftIO (Data.Text.IO.readFile file)
-   p <- getPosition
-   i <- getInput
-   lift (modify (\s -> s {input = i:input s}))
-   pushPosition p
-   setPosition (initialPos file)
-   setInput s
+--parseInclude = do
+--   rword "`include"
+--   file <- between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_'))
+--   s <- liftIO (Data.Text.IO.readFile file)
+--   p <- getPosition
+--   i <- getInput
+--   lift (modify (\s -> s {input = i:input s}))
+--   pushPosition p
+--   setPosition (initialPos file)
+--   setInput s
 
 
 parseCompName = do
@@ -143,14 +158,12 @@ parseCompDef = do
    ext   <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)
    cType <- parseCompType
    name  <- parseCompName
-   expr  <- withReaderT (\s -> s {level = level s + 1, scope = scope s ++ [name]}) $ braces $ many parseExpr
+   expr  <- withReaderT (\s -> s {level = level s + 1, scope = scope s ++ [name]}) $ braces' (many parseExpr)
    env   <- ask
    when ((cType == Addrmap) && (level env == 0)) (lift (modify (\s -> s {topInst = topInst s ++ [name]})))
    let def = pos :< CompDef ext cType name expr
    lift (modify $ \s -> s { syms = S.add (scope env) name def (syms s)})
-   _ <- try semi <|> do
-                        lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
-                        return ""
+   _ <- try (void $ semi) <|> lift (modify $ \s -> s { loc = ANON_DEF, nam = name })
    return def
 
 parseCompType =
@@ -253,7 +266,7 @@ parseAlign = do
    (Just _, Just _, _) -> fail "@ and %= operators are mutualy exclusive"
    _ -> return $ Alignment at mod stride
  where
-    p1 = do a <- char '@' *> parseNumeric; return (Just a)
+    p1 = do a <- L.char '@' *> parseNumeric; return (Just a)
     p2 = do a <- symbol "%=" *> parseNumeric; return (Just a)
     p3 = do a <- symbol "+=" *> parseNumeric; return  (Just a)
 
@@ -278,14 +291,15 @@ parsePropDef = do
    semi
    return $ pos :< PropDef id t c d
 
-parseNumeric = lexeme L.decimal
+--parseNumeric :: forall e s m a. (MonadParsec e s m, Token s ~ Char, a ~ Integer) => m Integer
+parseNumeric = L.decimal
 
 
 parseRHS :: Text -> SrdlParser PropRHS
 parseRHS prop = if isEnum prop then parseEnum else parseNum <|> parseBool <|> parseLit <|> parseRef
    where parseLit = do
-            a <- between dquote dquote (many (noneOf ("\"" :: String)))
-            return $ PropLit (T.pack a)
+            a <- between dquote dquote (many (L.noneOf ("\"" :: String)))
+            return $ PropLit (tcat a)
          parseNum = do
             a <- parseNumeric
             return $ PropNum a
@@ -320,11 +334,26 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-pp = runStateT (runReaderT parseTop (ReaderEnv [""] 0)) (ParseState CHILD "" NotSpec 0 M.empty [] [])
+pp p = runStateT (runReaderT p (ReaderEnv [""] 0)) (ParseState CHILD "" NotSpec 0 M.empty [] [])
+
+fromRight (Right a) = a
+
+--hsrdlParseFile file = do
+--   f  <- Data.Text.IO.readFile file
+--   case runParser parseStream file f of
+--      Left err -> do
+--        putStrLn (parseErrorPretty err)
+--        return $ Left err
+--      Right f' -> do
+--        runParserT (pp parseTop) file f'
 
 hsrdlParseFile file = do
-   f <- Data.Text.IO.readFile file
-   runParserT pp file f
+   let f1 =  "test/srdl/user_prop.srdl"
+   let f2 =  "test/srdl/counter_overflow.srdl"
+   f1t <- Data.Text.IO.readFile f1
+   f2t <- Data.Text.IO.readFile f2
+   runParserT (pp parseTop) file ( (fromRight $ runParser parseStream f1 f1t) ++
+                                   (fromRight $ runParser parseStream f2 f2t))
 
 parseSRDL file = do
   p <- hsrdlParseFile file

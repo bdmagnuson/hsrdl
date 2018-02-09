@@ -12,6 +12,7 @@ import Data.Text (Text, unpack)
 import Data.Text.Prettyprint.Doc.Render.Text (hPutDoc)
 import System.IO
 import Data.Functor.Foldable
+import Debug.Trace
 
 import Language.SRDL.Types
 import Language.SRDL.Parser
