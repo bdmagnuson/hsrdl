@@ -1,12 +1,8 @@
-property userprop {
-   component = reg;
-   type = boolean;
-};
-
-
 addrmap test {
 
    field fff {};
+
+   `define foo realdef
 
    reg realdef {
       default intr;
@@ -18,13 +14,18 @@ addrmap test {
       fff mee[2];
    } bbb[4] @64;
 
-   realdef moreinst;
-   realdef moreinst1;
-   realdef moreinst2;
+   `foo moreinst;
+   `define foo2 dfdf
+
+   `include "test/srdl/include.srdl"
+   `foo moreinst1;
+   included.include_reg->reset = 1;
+   `foo moreinst2;
 
    reg {
       field {} f1;
    } reg2[4];
+
 
    reg2[3].f1->hw = rw;
    reg2[3].f1->we = true;
@@ -42,3 +43,7 @@ addrmap test {
 
 };
 
+property userprop {
+   component = reg;
+   type = boolean;
+};

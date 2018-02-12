@@ -1,0 +1,7 @@
+
+
+reg more_include {
+   field {} f1;
+} yay;
+
+yay.f1->|reset = 1;

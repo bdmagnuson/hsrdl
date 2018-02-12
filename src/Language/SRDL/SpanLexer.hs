@@ -33,27 +33,6 @@ import Debug.Trace
 
 import Language.SRDL.Stream
 
---sc = skipMany $ (hidden (void spaceChar))
---
---symbol' :: forall e s m. (MonadParsec e s m, Token s ~ Span, Tokens s ~ [Span])
---  => m ()              -- ^ How to consume white space after lexeme
---  -> Tokens s          -- ^ Symbol to parse
---  -> m (Tokens s)
---symbol' spc = L.lexeme spc . string
---
---symbol x = symbol' sc [(Span (initialPos "") (initialPos "") x)]
---
---lexeme = L.lexeme sc
---
---string :: forall e s m. (MonadParsec e s m, Token s ~ Span, Tokens s ~ [Span]) => Tokens s -> m (Tokens s)
---string = tokens f
---  where f x y = let xt = chunkToTokens (Proxy :: Proxy s) x
---                    yt = chunkToTokens (Proxy :: Proxy s) y
---                    result = and (zipWith (==) (trace (show xt) xt) (trace (show yt) yt))
---                in trace (show result) result
-
---spaceChar = satisfy ((T.foldl (flip $ (&&) . isSpace) True) . spanBody)  <?> "white space"
---
 
 spanPred p = (T.foldl (flip $ (&&) . p) True) . spanBody
 
@@ -86,13 +65,14 @@ satisfy f = token testChar Nothing
 char :: (MonadParsec e s m, Token s ~ Span) => Char -> m (Token s)
 char c = satisfy $ bodyEqual (Span (initialPos "") (initialPos "") (T.singleton c))
 
-string :: (MonadParsec e s m, s ~ [Span]) => Tokens s -> m (Tokens s)
-string = tokens xEqual
 
 bodyEqual x y = (spanBody x == spanBody y)
 
 xEqual :: (s ~ [Span]) => Tokens s -> Tokens s -> Bool
 xEqual x y = (T.concat (map spanBody x)) == (T.concat (map spanBody y))
+
+string :: (MonadParsec e s m, s ~ [Span]) => Tokens s -> m (Tokens s)
+string = tokens xEqual
 
 
 space :: MonadParsec e s m
@@ -104,27 +84,11 @@ space :: MonadParsec e s m
 space sp line block = M.skipMany $ M.choice
   [M.hidden sp, M.hidden line, M.hidden block]
 
--- | This is a wrapper for lexemes. Typical usage is to supply the first
--- argument (parser that consumes white space, probably defined via 'space')
--- and use the resulting function to wrap parsers for every lexeme.
---
--- > lexeme  = L.lexeme spaceConsumer
--- > integer = lexeme L.decimal
---
 lexeme :: (MonadParsec e s m) => m () -> m a -> m a 
 lexeme spc p = p <* spc
 
---symbol :: (MonadParsec e s m, Token s ~ Span)
---  => m ()              -- ^ How to consume white space after lexeme
---  -> Text
---  -> m (Token s)
---symbol spc s = lexeme spc (string s)
-
 ip :: Text -> Span
 ip x = Span (initialPos "") (initialPos "") x
-
-fff :: (Stream s, s ~ [Span]) => s -> Maybe Span
-fff = parseMaybe (letterChar)
 
 parseMaybe :: (Stream s, s ~ [Span]) => Parsec (M.ErrorFancy Void) s a -> s -> Maybe a
 parseMaybe = M.parseMaybe
@@ -134,7 +98,6 @@ decimal
   :: forall e s m a. (MonadParsec e s m, s ~ [Span])
   => m Integer
 decimal = decimal_ M.<?> "integer"
-{-# INLINEABLE decimal #-}
 
 decimal_
   :: forall e s m a. (MonadParsec e s m, s ~ [Span])
@@ -145,9 +108,6 @@ decimal_ = mkNum <$> M.takeWhile1P (Just "digit") (isDigit . T.head . spanBody)
     mkNum x = (read . T.unpack) (T.concat (map spanBody x))
 
 
---foo :: (MonadParsec e s m, Token s ~ Span) => m (Token s)
---foo = string "hi"
---
 sp :: (MonadParsec e s m, s ~ [Span]) => m ()
 sp = void (M.many spaceChar)
 
@@ -166,3 +126,4 @@ skipBlockComment start end = p >> void (M.manyTill (satisfy (const True))  n)
   where
     p = string start
     n = string end
+

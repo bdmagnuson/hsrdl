@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Language.SRDL.Parser (
        parseSRDL
@@ -14,7 +15,6 @@ import Control.Comonad
 import Control.Comonad.Cofree
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Perm
---import Text.Megaparsec.Char hiding (string)
 import qualified Data.Map.Strict as M
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
@@ -22,7 +22,6 @@ import Control.Monad.Trans.Class
 import Data.Text.IO (readFile)
 import Control.Monad.IO.Class
 
---import qualified Text.Megaparsec.Char.Lexer as L hiding (symbol)
 import qualified Language.SRDL.SpanLexer as L
 
 import qualified Data.Text as T
@@ -35,7 +34,7 @@ import Data.Maybe (fromJust)
 import Language.SRDL.Props
 import Language.SRDL.Types hiding (ElabF)
 import qualified Language.SRDL.SymbolTable as S
-import Language.SRDL.Stream
+import Language.SRDL.StreamParser
 
 data ParseLoc =
       CHILD
@@ -65,12 +64,13 @@ symbol x = L.lexeme sc (L.string [(ip x)])
 lbrace = symbol "{"
 rbrace = symbol "}"
 comma  = symbol ","
-dot    = symbol "."
-dref   = symbol "->"
 equal  = symbol "="
 pipe   = symbol "|"
 dquote = symbol "\""
 semi   = symbol ";"
+
+dot    = L.char '.'
+dref   = symbol "->"
 
 tcat x = T.concat (map spanBody x)
 
@@ -291,7 +291,6 @@ parsePropDef = do
    semi
    return $ pos :< PropDef id t c d
 
---parseNumeric :: forall e s m a. (MonadParsec e s m, Token s ~ Char, a ~ Integer) => m Integer
 parseNumeric = L.decimal
 
 
@@ -338,28 +337,24 @@ pp p = runStateT (runReaderT p (ReaderEnv [""] 0)) (ParseState CHILD "" NotSpec 
 
 fromRight (Right a) = a
 
---hsrdlParseFile file = do
---   f  <- Data.Text.IO.readFile file
---   case runParser parseStream file f of
---      Left err -> do
---        putStrLn (parseErrorPretty err)
---        return $ Left err
---      Right f' -> do
---        runParserT (pp parseTop) file f'
-
 hsrdlParseFile file = do
-   let f1 =  "test/srdl/user_prop.srdl"
-   let f2 =  "test/srdl/counter_overflow.srdl"
-   f1t <- Data.Text.IO.readFile f1
-   f2t <- Data.Text.IO.readFile f2
-   runParserT (pp parseTop) file ( (fromRight $ runParser parseStream f1 f1t) ++
-                                   (fromRight $ runParser parseStream f2 f2t))
+   f <- Data.Text.IO.readFile file
+   s <- parseStream file f
+   return $ case s of
+             Left err -> Left (parseErrorPretty err)
+             Right p  -> Right p
+
+hsrdlParseStream (Left e) = return $ Left e
+hsrdlParseStream (Right s) = do
+   r <- runParserT (pp parseTop) "" s
+   return $ case r of
+             Left err -> Left (parseErrorPretty err)
+             Right p  -> Right p
 
 parseSRDL file = do
-  p <- hsrdlParseFile file
-  case p of
-    Left err -> do
-      putStrLn (parseErrorPretty err)
-      return Nothing
-    Right (t, s) -> return $ Just (topInst s, syms s)
-
+    hsrdlParseFile file >>= hsrdlParseStream >>= \case
+      Left err -> do
+        putStrLn err
+        return Nothing
+      Right (t, s) -> return $ Just (topInst s, syms s)
+--
