@@ -24,6 +24,7 @@ import qualified Data.List as DL
 import qualified Data.Map.Strict as M
 import           Data.Void
 import           Data.Monoid ((<>))
+import           System.Environment
 
 import           Debug.Trace
 
@@ -42,7 +43,7 @@ parseStream = runParserT (evalStateT parseStream' (ParseState [True] M.empty [])
 parseStream' :: StreamParser T.Text
 parseStream' = T.concat <$> many p
    where p = do
-          b <- tick <|> block
+          b <- tick <|> try env <|> block
           end <- option False (True <$ hidden eof)
           h <- use stack
           when (end && (h /= [])) $ do
@@ -53,9 +54,21 @@ parseStream' = T.concat <$> many p
           return b
 
 block :: StreamParser T.Text
-block = takeWhile1P Nothing (/= '`')
+block = takeWhile1P Nothing (\x -> x /= '`' && x /= '$')
 
 dquote = char '"'
+lbrace = char '{'
+rbrace = char '}'
+
+env = do
+   char '$'
+   var <- between lbrace rbrace (many (alphaNumChar <|> char '_'))
+   pos <- getPosition
+   lkup <- liftIO $ lookupEnv var
+   case lkup of
+     Just a -> return $ T.pack a <> marker' pos
+     Nothing -> return T.empty
+
 
 tick :: StreamParser T.Text
 tick = do

@@ -13,9 +13,9 @@ addrmap test {
       field {reset = 4;} d[2];
       field {counter;} c[7:6];
       fff mee[2];
-   } bbb[`FOUR] @64;
+   } bbb[${FOUR}] @64;
 
-   realdef moreinst;
+   realdef moreinstFOO[${FOUR}];
 
    `include "test/srdl/include.srdl"
 
