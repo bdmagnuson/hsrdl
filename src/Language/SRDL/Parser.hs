@@ -14,7 +14,6 @@ import Text.Megaparsec.Perm
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Data.Map.Strict as M
-import Control.Monad.Trans.Reader
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Class
 import Data.Text.IO (readFile)
@@ -35,11 +34,8 @@ data ParseState = ParseState {
     anonIdx  :: Int
 } deriving (Show)
 
-data ReaderEnv = ReaderEnv {
-    level :: Int
-}
 
-type SrdlParser = ReaderT ReaderEnv (StateT ParseState (ParsecT (ErrorFancy Void) Text IO))
+type SrdlParser = StateT ParseState (ParsecT (ErrorFancy Void) Text IO)
 
 sc = L.space (void spaceChar) lineCmnt blockCmnt
   where lineCmnt  = L.skipLineComment "//"
@@ -105,20 +101,17 @@ parseCompName = marker parseCompName'
 parseCompName' = do
     pos <- getPosition
     parseIdentifier <|> do
-      idx <- lift get
-      lift (modify (\s -> s {anonIdx = anonIdx s + 1}))
+      idx <- get
+      modify (\s -> s {anonIdx = anonIdx s + 1})
       return $ "_ad" <> (T.pack . show) (anonIdx idx)
 
-addTopDef c name = do
-    env <- ask
-    return ()
 
 parseCompDef = do
    pos   <- getPosition
    ext   <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)
    cType <- parseCompType
    name  <- parseCompName
-   expr  <- withReaderT (\s -> s {level = level s + 1}) $ braces $ many parseExpr
+   expr  <- braces $ many parseExpr
    anon  <- many parseCompInst
    semi
    return $ pos :< CompDef ext cType name expr anon
@@ -140,7 +133,6 @@ parseRsvdRet a b = do
 --parseRsvdRet a b = marker (parseRsvdRet' a b)
 
 parseExpCompInst' = do
-   env  <- ask
    pos  <- getPosition
    ext  <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)
    inst <- parseIdentifier
@@ -301,7 +293,7 @@ flatten (p :< ExpCompInst e n a) = map f a
 
 flatten x = [x]
 
-pp x = runStateT (runReaderT x (ReaderEnv 0)) (ParseState NotSpec 0)
+pp x = runStateT x (ParseState NotSpec 0)
 
 hsrdlParseFile file = do
   f <- Data.Text.IO.readFile file
