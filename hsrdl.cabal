@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Language.SRDL.Elab2
                      , Language.SRDL.Parser
+                     , Language.SRDL.StreamParser
                      , Language.SRDL.Props
                      , Language.SRDL.SymbolTable
                      , Language.SRDL.Types

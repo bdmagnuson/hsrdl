@@ -6,7 +6,6 @@
 
 module Language.SRDL.StreamParser
      ( parseStream
-     , module Language.SRDL.Stream
      ) where
 
 import           Control.Monad
@@ -27,9 +26,6 @@ import           Data.Void
 import           Data.Monoid ((<>))
 
 import           Debug.Trace
-
-import Language.SRDL.Stream
-
 
 data ParseState = ParseState
   { _accept  :: [Bool]

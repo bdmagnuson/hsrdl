@@ -3,6 +3,7 @@ addrmap test {
    field fff {};
 
    `define foo realdef
+   `define FOUR 5
 
    reg realdef {
       default intr;
@@ -12,20 +13,20 @@ addrmap test {
       field {reset = 4;} d[2];
       field {counter;} c[7:6];
       fff mee[2];
-   } bbb[4] @64;
+   } bbb[`FOUR] @64;
 
-   `foo moreinst;
-   `define foo2 dfdf
+   realdef moreinst;
 
    `include "test/srdl/include.srdl"
+
    `foo moreinst1;
-   included.include_reg->reset = 1;
-   `foo moreinst2;
 
    reg {
       field {} f1;
    } reg2[4];
 
+
+   realdef moreinst2;
 
    reg2[3].f1->hw = rw;
    reg2[3].f1->we = true;

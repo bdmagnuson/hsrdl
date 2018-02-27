@@ -11,6 +11,7 @@ import qualified Data.Map.Strict as M
 import qualified Text.Megaparsec as P
 import qualified Text.Megaparsec.Char as L
 import Data.Void
+import Debug.Trace
 
 import Language.SRDL
 
