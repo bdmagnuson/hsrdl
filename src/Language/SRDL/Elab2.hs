@@ -259,7 +259,7 @@ elaborate (pos :< PropAssign path prop rhs) (Just e) =
         Nothing -> return Nothing
 
 
-elaborate d@(_ :< CompDef _ _ n _) e = return e
+elaborate d@(_ :< CompDef _ _ n _ _) e = return e
 
 elaborate (pos :< PropDefault prop rhs) (Just e) = do
   legal <- checkDefaultAssign pos (Just (e ^. _Fix)) prop rhs
@@ -277,6 +277,8 @@ elaborate (pos :< PropDefault prop rhs) (Just e) = do
           logMsg err pos ("Property " <> prop <> " not defined for any component")
           return Nothing
         Just p -> return (Just p)
+
+elaborate e _ = error (show e)
 
 checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
   where
@@ -301,14 +303,45 @@ cType _ _ _ Nothing = return Nothing
 getDef syms scope def = fromMaybe (error $ T.unpack ("No instance" <> def))
                                   (ST.lkup syms scope def)
 
-elab (ti, syms) =
-  map f ti
+elab x = map f ti
     where
+        (ti, syms) = execState (findTop' x) ([], M.empty)
         env = ReaderEnv {_scope = [""], _syms = syms}
         st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs], _instCache = M.empty}
         f x = runState (runReaderT (instantiate (pos :< CompInst NotSpec x x Nothing (Alignment Nothing Nothing Nothing))) env) st
 
             where pos = extract $ getDef syms [""] x ^. _2
+
+
+type TopState = ([Text], ST.SymTab (Expr SourcePos))
+
+
+-- Walk AST and find top level Addrmaps that aren't instantiated elsewhere
+-- Could use ReaderT
+
+findTop' :: Expr SourcePos -> State TopState ()
+findTop' (_ :< TopExpr a) = foldl1 (>>) (map (findTop True [""]) a)
+
+findTop :: Bool -> [Text] -> Expr SourcePos -> State TopState ()
+
+findTop True s d@(_ :< CompDef _ Addrmap n e _) = do
+   _2 %= ST.add s n d
+   _1 %= (n:)
+   mapM_ (findTop False (s ++ [n])) e
+
+findTop _ s d@(_ :< CompDef _ _ n e _) = do
+   _2 %= ST.add s n d
+   mapM_ (findTop False (s ++ [n])) e
+
+findTop _ s e@(_ :< CompInst _ d _ _ _) = do
+    syms <- use _2
+    case ST.lkup syms s d of
+       Nothing -> return ()
+       Just ([empty], _ :< CompDef _ Addrmap n _ _) -> _1 %= filter (/= n)
+       _ -> return ()
+
+findTop _ _ _ = return ()
+
 
 
 

@@ -33,7 +33,7 @@ import Language.SRDL.Stream
 
 data ParseState = ParseState
   { _accept  :: [Bool]
-  , _defines :: M.Map T.Text Span
+  , _defines :: M.Map T.Text T.Text
   , _stack   :: [(SourcePos, T.Text)]
   } deriving (Eq, Show)
 
@@ -43,61 +43,56 @@ type StreamParser = StateT ParseState (ParsecT (ErrorFancy Void) T.Text IO)
 
 parseStream = runParserT (evalStateT parseStream' (ParseState [True] M.empty []))
 
-parseStream' :: StreamParser [Span]
-parseStream' = concat <$> many p
+parseStream' :: StreamParser T.Text
+parseStream' = T.concat <$> many p
    where p = do
           b <- tick <|> block
           end <- option False (True <$ hidden eof)
           h <- use stack
           when (end && (h /= [])) $ do
-            --setPosition (h ^?! ix 0 . _1)
-            popPosition
-            setInput    (h ^?! ix 0 . _2)
+            let p = h ^?! ix 0 . _1
+            setPosition p
+            setInput    (marker' p <> (h ^?! ix 0 . _2))
             stack %= tail
           return b
 
-block :: StreamParser [Span]
-block = do
-   st   <- getPosition
-   file <- takeWhile1P Nothing (/= '`')
-   ff   <- getInput
-   end  <- getPosition
-   return $ [Span st end file]
+block :: StreamParser T.Text
+block = takeWhile1P Nothing (/= '`')
 
 dquote = char '"'
 
-tick :: StreamParser [Span]
+tick :: StreamParser T.Text
 tick = do
+   start <- getPosition
    void (char '`')
    d <- identifier
    case d of
       "define" -> do
          name  <- identifier
-         start <- getPosition
          def   <- takeWhile1P Nothing (/= '\n')
-         end   <- getPosition
-         defines . at name ?= Span start end (def <> " ")
+         defines . at name ?= def
+         return T.empty
       "include" -> do
-         file <- between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_'))
+         file <- L.lexeme sc $ between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_'))
          s    <- liftIO (Data.Text.IO.readFile file)
          p    <- getPosition
          i    <- getInput
-         pushPosition p
          stack %= (:) (p, i)
          setPosition (initialPos file)
          setInput s
+         return $ marker' (initialPos file)
       _ -> do
             foo <- use (defines . at d)
             case foo of
               Nothing -> fail ("Unknown define: " ++ (T.unpack d))
               Just span -> do
-                pos <- getPosition
                 input <- getInput
-                stack %= (:) (pos, input)
-                pushPosition pos
-                setPosition (spanStart span)
-                setInput (spanBody span)
-   return []
+                setInput (span <> marker "define expansion" start <> input)
+                setPosition start
+                return T.empty
+
+marker n pos = "##" <> T.pack (show (pos { sourceName = n })) <> "##"
+marker' pos = "##" <> T.pack (show pos) <> "##"
 
 sc :: (MonadParsec e s m, s ~ T.Text) => m ()
 sc = L.space space1 lineCmnt blockCmnt

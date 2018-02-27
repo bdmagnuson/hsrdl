@@ -73,7 +73,18 @@ data ExprF a =
         ext    :: Implementation,
         ctype  :: CompType,
         name   :: Text,
-        expr   :: [a]
+        expr   :: [a],
+        anon   :: [a]
+     }
+   | AnonCompInst {
+        name   :: Text,
+        arr    :: Maybe Array,
+        align  :: Alignment
+     }
+   | ExpCompInst {
+        ext    :: Implementation,
+        def    :: Text,
+        anon   :: [a]
      }
    | CompInst {
         ext    :: Implementation,

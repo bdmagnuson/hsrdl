@@ -43,8 +43,8 @@ instance Stream [Span] where
   tokenToChunk  Proxy = pure
   tokensToChunk Proxy = id
   chunkToTokens Proxy = id
-  chunkLength   Proxy = foldl1 (+) . map (T.length . spanBody)
-  chunkEmpty    Proxy = all ((== 0) . T.length . spanBody)
+  chunkLength   Proxy = length--foldl1 (+) . map (T.length . spanBody)
+  chunkEmpty    Proxy = null--all ((== 0) . T.length . spanBody)
 
   positionAt1 Proxy pos (Span start _ _) = trace ("pos1" ++ show start) start
   positionAtN Proxy pos [] = pos
