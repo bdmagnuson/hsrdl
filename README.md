@@ -39,11 +39,10 @@ addrmap counter_overflow {
 The above defines three registers.  The first is an ordinary read/write register with a couple of fields.  The other two are counters where the increment of the 2nd is tied to the overflow event of the 1st.  The 1st counters increment will be a primary input of the register block.
 
 # TODO #
-* Properties that support more than one type on RHS
 * Catch post assigns to non dynamic properties
 * Catch field instances outside a Reg
 * Signal components
-* Preprocessor directives
+* if(n)def/else/endif preprocessor directives
 
 ## Currently unsupported properties ##
 *    async

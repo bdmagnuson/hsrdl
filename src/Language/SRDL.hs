@@ -44,5 +44,5 @@ writeVerilog (SRDL st) = mapM_ f maps
      f x = withFile (unpack ((x ^. _Fix . escope) !! 1) ++ "_regs.sv") WriteMode (flip hPutDoc (verilog x))
 
 writeUVM :: Text -> SRDL -> IO ()
-writeUVM n (SRDL st) = withFile (unpack n ++ "_regs_pkg.sv") WriteMode (flip hPutDoc (generateUVM . getInstCache $ st))
+writeUVM n (SRDL st) = withFile (unpack n ++ "_regs_pkg.sv") WriteMode (flip hPutDoc (generateUVM n . getInstCache $ st))
 

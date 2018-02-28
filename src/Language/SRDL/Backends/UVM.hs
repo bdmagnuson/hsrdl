@@ -22,8 +22,15 @@ import qualified Language.SRDL.SymbolTable as ST
 import Language.SRDL.Types
 import Language.SRDL.Props
 
-generateUVM :: ST.SymTab (Fix ElabF) -> P.Doc Text
-generateUVM e = P.vcat $ map f (sortBy (flip (comparing T.length) `on` fst) (M.toList e))
+generateUVM :: Text -> ST.SymTab (Fix ElabF) -> P.Doc Text
+generateUVM n e = P.vcat $ [header, classes e, footer]
+   where header = P.vcat [ pt "package" <+> pretty n <> pt "_regs;"
+                         , pt "import uvm_pkg::*;"
+                         , pt "`include \"uvm_macros.svh\""
+                         ]
+         footer = pt "endpackage"
+
+classes e = P.vcat $ map f (sortBy (flip (comparing T.length) `on` fst) (M.toList e))
    where f (k, i) = P.vcat $ map (f' k) (M.toList (M.filter (\x -> x ^. _Fix . etype /= Field) i))
          f' k1 (k2, i) = uvmClass k1 k2 i
 
@@ -55,6 +62,7 @@ uvmClass s n i = P.vcat [P.hang 3 (P.vcat [open, decl, new, build]), close]
 printDecl i =
    case i ^. _Fix . etype of
       Array -> c <+> n <> P.brackets (pretty $ length (i ^. _Fix . einst)) <> P.semi
+      Field -> pt "uvm_reg_field" <+> n <> P.semi
       _ -> c <+> n <> P.semi
    where c = sname i
          n = pretty $ i ^. _Fix . ename
@@ -89,7 +97,7 @@ printBuild Reg r = P.vcat [P.hang 3 (P.vcat [proto, create, config]), end]
          end = pt "endfunction"
          create = P.vcat $ map (\f -> pretty (f ^. _Fix . ename) <+> pt "= new();") (r ^. _Fix . einst)
          config = P.vcat $ map configline (r ^. _Fix . einst)
-         configline f = pretty (f ^. _Fix . ename) <> pt ".configure" <> (P.parens . P.hcat) (P.punctuate P.comma [size, lsb, access, volitile, reset, has_reset, is_rand, ind]) <> P.semi
+         configline f = pretty (f ^. _Fix . ename) <> pt ".configure" <> (P.parens . P.hcat) (P.punctuate P.comma [pt "this", size, lsb, access, volitile, reset, has_reset, is_rand, ind]) <> P.semi
            where
              size = pretty $ getNumProp "fieldwidth" f
              lsb  = pretty $ getNumProp "lsb" f
@@ -105,20 +113,28 @@ printBuild Reg r = P.vcat [P.hang 3 (P.vcat [proto, create, config]), end]
              ind = pt "0"
 
 
-printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, sNew, aNew, postProps i, sAdd, aAdd]), end]
+printBuild ctype i = P.vcat [P.hang 3 (P.vcat [proto, dmap, sNew, aNew, sCfg, aCfg, sBld, aBld, postProps i, sAdd, aAdd]), end]
    where proto = pretty ("virtual function void build();" :: Text)
          end = pretty ("endfunction" :: Text)
+         dmap = pt "default_map = create_map(\"default_map\", 0, 8, UVM_LITTLE_ENDIAN);"
          (scalar, array)    = partition (\x -> x ^. _Fix . etype /= Array) (i ^. _Fix . einst)
-         (scalarR, scalarB) = partition (\x -> x ^. _Fix . etype /= Reg) scalar
-         (arrayR, arrayB)   = partition (\x -> x ^? _Fix . einst . ix 0 . _Fix . etype /= Just Reg) array
+         (scalarR, scalarB) = partition (\x -> x ^. _Fix . etype == Reg) scalar
+         (arrayR, arrayB)   = partition (\x -> x ^? _Fix . einst . ix 0 . _Fix . etype == Just Reg) array
 
          n x = pt (x ^. _Fix . ename)
          sNew = P.vcat $ map (\x -> pt (x ^. _Fix . ename) <+> P.equals <+> pt "new();") scalar
          aNew = let n x = pt (x ^. _Fix . ename)
                 in P.vcat $ map (\x -> P.hang 3 $ P.vcat ["foreach" <> P.parens (n x <> pt "[i]"), n x <> pt "[i]" <+> P.equals <+> pt "new();"]) array
 
+         sCfg = P.vcat $ map (\x -> pt (x ^. _Fix . ename) <> pt ".configure(this, null);") scalar
+         aCfg = let n x = pt (x ^. _Fix . ename)
+                in P.vcat $ map (\x -> P.hang 3 $ P.vcat ["foreach" <> P.parens (n x <> pt "[i]"), n x <> pt "[i].configure(this, null);"]) array
 
-         regAdd' n o = pt "default_map.add_reg" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o, pt "RW"]) <> P.semi
+         sBld = P.vcat $ map (\x -> pt (x ^. _Fix . ename) <> pt ".build();") scalar
+         aBld = let n x = pt (x ^. _Fix . ename)
+                in P.vcat $ map (\x -> P.hang 3 $ P.vcat ["foreach" <> P.parens (n x <> pt "[i]"), n x <> pt "[i].build();"]) array
+
+         regAdd' n o = pt "default_map.add_reg" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o, pt "\"RW\""]) <> P.semi
          blkAdd' n o = pt "default_map.add_submap" <> (P.parens . P.hcat) (P.punctuate P.comma [n, o]) <> P.semi
 
          sAdd = P.vcat $ map sregAdd scalarR ++ map aregAdd arrayR
