@@ -330,7 +330,7 @@ findTop True s d@(_ :< CompDef _ Addrmap n e _) = do
    _1 %= (n:)
    mapM_ (findTop False (s ++ [n])) e
 
-findTop _ _ (_ :< PropDef n t c v) = do
+findTop _ _ (_ :< PropDef n t c v) =
    mapM_ (\x -> _3 . ix x . at n ?= Property [t] v) c
 
 findTop _ s d@(_ :< CompDef _ _ n e _) = do

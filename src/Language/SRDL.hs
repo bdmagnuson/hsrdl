@@ -28,7 +28,7 @@ readSRDL file = do
   res <- parseSRDL file
   case res of
      Nothing -> return M.empty
-     Just r  -> mapM f (elab r) >>= (return . M.fromList . catMaybes)
+     Just r  -> fmap (M.fromList . catMaybes) (mapM f (elab r))
   where f (Nothing, st) = do
           mapM_ (putStrLn . unpack) (getMsgs st)
           putStrLn "Errors found.  Exiting..."  >> return Nothing

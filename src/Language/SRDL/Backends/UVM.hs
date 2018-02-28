@@ -23,7 +23,7 @@ import Language.SRDL.Types
 import Language.SRDL.Props
 
 generateUVM :: Text -> ST.SymTab (Fix ElabF) -> P.Doc Text
-generateUVM n e = P.vcat $ [header, classes e, footer]
+generateUVM n e = P.vcat [header, classes e, footer]
    where header = P.vcat [ pt "package" <+> pretty n <> pt "_regs;"
                          , pt "import uvm_pkg::*;"
                          , pt "`include \"uvm_macros.svh\""

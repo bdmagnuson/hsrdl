@@ -114,7 +114,7 @@ tick = do
       _ -> do
             foo <- use (defines . at d)
             case foo of
-              Nothing -> fail ("Unknown define: " ++ (T.unpack d))
+              Nothing -> fail ("Unknown define: " ++ T.unpack d)
               Just span -> do
                 input <- getInput
                 setInput (span <> marker' start <> input)

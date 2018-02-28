@@ -110,7 +110,7 @@ filterExt x = filter (\x -> x ^. xisext == External) (hylo foldExt unfoldExt x)
     foldExt (Node e i) =
        case (e ^. xisext, e ^. xshared) of
          (External,    _) -> [e]
-         (       _, True) -> if length i == 0
+         (       _, True) -> if null i
                              then []
                              else [e { _xbase = fromJust $ minimumOf (traverse . xbase) (concat i)
                                      , _xlast = fromJust $ maximumOf (traverse . xlast) (concat i)}]

@@ -86,10 +86,10 @@ parseIdentifier  = do
 parseTop = do
     pos <- getPosition
     e <- many parseExpr
-    return $ pos :< (TopExpr (concatMap flatten e))
+    return $ pos :< TopExpr (concatMap flatten e)
 
 parseExpr' :: SrdlParser (Expr SourcePos)
-parseExpr' = do
+parseExpr' =
       parseCompDef
   <|> try parsePropDef
   <|> parsePropAssign
@@ -287,11 +287,11 @@ rws = [ "accesswidth", "activehigh", "activelow", "addressing", "addrmap",
         "woclr", "woset", "wr", "xored", "then", "else", "while", "do", "skip",
         "true", "false", "not", "and", "or" ]
 
-flatten (p :< CompDef ext c n e a) = (p :< CompDef ext c n (concatMap flatten e) []):(map f a)
-   where f (p :< AnonCompInst name arr align) = (p :< CompInst NotSpec n name arr align)
+flatten (p :< CompDef ext c n e a) = (p :< CompDef ext c n (concatMap flatten e) []):map f a
+   where f (p :< AnonCompInst name arr align) = p :< CompInst NotSpec n name arr align
 
 flatten (p :< ExpCompInst e n a) = map f a
-   where f (p :< AnonCompInst name arr align) = (p :< CompInst e n name arr align)
+   where f (p :< AnonCompInst name arr align) = p :< CompInst e n name arr align
 
 flatten x = [x]
 
@@ -311,7 +311,7 @@ hsrdlParseStream f (Right s) = do
              Left err -> Left (parseErrorPretty err)
              Right p  -> Right p
 
-parseSRDL file = do
+parseSRDL file =
   hsrdlParseFile file >>= hsrdlParseStream file >>= \case
     Left err -> do
       putStrLn err
