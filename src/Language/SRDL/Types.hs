@@ -187,7 +187,7 @@ instance P.Pretty PropRHS where
    pretty (PropEnum a)   = pretty "enum"
 
 data Property = Property {
-   _ptype    :: PropType,
+   _ptype    :: [PropType],
    _pdefault :: Maybe PropRHS
 } deriving (Show,Eq)
 

@@ -69,6 +69,26 @@ env = do
      Just a -> return $ T.pack a <> marker' pos
      Nothing -> return T.empty
 
+expandEnv :: String -> IO String
+expandEnv [] = return []
+expandEnv x@('$':'{':ss) = do
+  let (var, rest) = break (== '}') ss
+  if null rest
+  then return x
+  else do
+        lkup <- lookupEnv var
+        case lkup of
+          Just a -> (a ++) <$> expandEnv (tail rest)
+          Nothing -> expandEnv (tail rest)
+
+expandEnv x@('$':ss) = do
+  let (var, rest) = break (== '$') ss
+  (var ++) <$> expandEnv rest
+
+expandEnv ss = do
+  let (var, rest) = break (== '$') ss
+  (var ++) <$> expandEnv rest
+
 
 tick :: StreamParser T.Text
 tick = do
@@ -82,21 +102,22 @@ tick = do
          defines . at name ?= def
          return T.empty
       "include" -> do
-         file <- L.lexeme sc $ between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_'))
-         s    <- liftIO (Data.Text.IO.readFile file)
+         file <- L.lexeme sc $ between dquote dquote (many (alphaNumChar <|> char '.' <|> char '/' <|> char '_' <|> char '$' <|> lbrace <|> rbrace))
+         exp  <- liftIO (expandEnv file)
+         s    <- liftIO (Data.Text.IO.readFile exp)
          p    <- getPosition
          i    <- getInput
          stack %= (:) (p, i)
-         setPosition (initialPos file)
+         setPosition (initialPos exp)
          setInput s
-         return $ marker' (initialPos file)
+         return $ marker' (initialPos exp)
       _ -> do
             foo <- use (defines . at d)
             case foo of
               Nothing -> fail ("Unknown define: " ++ (T.unpack d))
               Just span -> do
                 input <- getInput
-                setInput (span <> marker "define expansion" start <> input)
+                setInput (span <> marker' start <> input)
                 setPosition start
                 return T.empty
 

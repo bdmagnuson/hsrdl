@@ -217,16 +217,16 @@ instantiate (pos :< CompInst iext d n arr align) = do
 
 elaborate _ Nothing = return Nothing
 elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
-    s <- lift get
-    if isJust $ i ^? ix cn
-        then do
-          logMsg err pos (cn <>  " already defined")
-          return Nothing
-        else do
-          new <- instantiate ins
-          case new of
-            Nothing -> return Nothing
-            Just a -> (return . Just) (i & _Fix . einst %~ (++ [a]))
+  s <- lift get
+  if isJust $ i ^? ix cn
+    then do
+      logMsg err pos (cn <>  " already defined")
+      return Nothing
+    else do
+      new <- instantiate ins
+      case new of
+        Nothing -> return Nothing
+        Just a -> (return . Just) (i & _Fix . einst %~ (++ [a]))
 
 
 elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
@@ -246,6 +246,7 @@ elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
                                   _              -> Nothing
 
                       else return e
+
 
 elaborate (pos :< PropAssign path prop rhs) (Just e) =
   case buildPropTraversal e path of
@@ -278,6 +279,7 @@ elaborate (pos :< PropDefault prop rhs) (Just e) = do
           return Nothing
         Just p -> return (Just p)
 
+
 elaborate e _ = error (show e)
 
 checkAssign pos (Just elm) prop rhs = cExist >>= cType pos prop rhs
@@ -305,15 +307,15 @@ getDef syms scope def = fromMaybe (error $ T.unpack ("No instance" <> def))
 
 elab x = map f ti
     where
-        (ti, syms) = execState (findTop' x) ([], M.empty)
+        (ti, syms, defs) = execState (findTop' x) ([], M.empty, defDefs)
         env = ReaderEnv {_scope = [""], _syms = syms}
-        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defDefs], _instCache = M.empty}
+        st  = ElabState {_msgs = Msgs [] [] [], _addr = 0, _nextbit = 0, _usedbits = S.empty, _baseAddr = 0, _sprops = [defs], _instCache = M.empty}
         f x = runState (runReaderT (instantiate (pos :< CompInst NotSpec x x Nothing (Alignment Nothing Nothing Nothing))) env) st
 
             where pos = extract $ getDef syms [""] x ^. _2
 
 
-type TopState = ([Text], ST.SymTab (Expr SourcePos))
+type TopState = ([Text], ST.SymTab (Expr SourcePos), M.Map CompType (M.Map Text Property))
 
 
 -- Walk AST and find top level Addrmaps that aren't instantiated elsewhere
@@ -328,6 +330,9 @@ findTop True s d@(_ :< CompDef _ Addrmap n e _) = do
    _2 %= ST.add s n d
    _1 %= (n:)
    mapM_ (findTop False (s ++ [n])) e
+
+findTop _ _ (_ :< PropDef n t c v) = do
+   mapM_ (\x -> _3 . ix x . at n ?= Property [t] v) c
 
 findTop _ s d@(_ :< CompDef _ _ n e _) = do
    _2 %= ST.add s n d

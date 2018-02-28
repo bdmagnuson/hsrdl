@@ -40,12 +40,13 @@ makeLenses ''ExtInfo
 
 data RegsFilter = FilterInternal | FilterExternal | FilterNone
 
+
 getProp t e p =
   case e ^? _Fix . eprops . ix p . _Just . t of
     Just b -> b
     _ -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, p)) (error "you dun f'd up")
-  where
-    a = e ^? _Fix . eprops . ix p . _Just
+   where
+     a = e ^? _Fix . eprops . ix p . _Just
 
 getBool = getProp _PropBool
 getNum  = getProp _PropNum
@@ -53,6 +54,31 @@ getEnum = getProp _PropEnum
 getIntr = getProp _PropIntr
 getRef  = getProp _PropRef
 getLit  = getProp _PropLit
+
+getAsLit e p =
+   case e ^? _Fix . eprops . ix p . _Just of
+      Nothing -> ""
+      Just (PropBool True) -> "1"
+      Just (PropBool False) -> "0"
+      Just (PropNum a) -> T.pack (show a)
+      Just (PropLit a) -> a
+      _ -> error "got a problem"
+
+--getProp e p = e ^. _Fix . eprops . at p
+--
+--getBool e p = case getProp e p of
+--                Just (Just (PropBool b)) -> b
+--getNum  e p = case getProp e p of
+--                Just (Just (PropNum b)) -> b
+--getEnum e p = case getProp e p of
+--                Just (Just (PropEnum b)) -> b
+--getIntr e p = case getProp e p of
+--                Just (Just (PropIntr a b)) -> (a, b)
+--getLit e p = case getProp e p of
+--                Just (Just (PropLit b)) -> b
+--getRef e p = case getProp e p of
+--                Just (Just (PropRef b)) -> b
+
 
 safeGetProp t e p = e ^? _Fix . eprops . ix p . _Just . t
 
@@ -97,7 +123,7 @@ fqName e = do
   modify (\x -> x ++ [(e ^. _Fix . etype, e ^. _Fix . ename)])
   p <- get
   r <- mapM fqName (e ^. _Fix . einst)
-  let u = e & _Fix . eprops %~ assignProp "fqname" (PropLit (pathName p))
+  let !u = e & _Fix . eprops %~ assignProp "fqname" (PropLit (pathName p))
             & _Fix . einst  .~ r
   modify init
   return u
@@ -421,25 +447,25 @@ fieldCTRUpdate f =
       udDecl = upDecl ++ dwDecl ++ [vStmt "reg wrap"]
 
       uflowChk = if isPropSet f "decrsaturate"
-                 then [vIf (vStmt $ "underflow || next > " <> getLit f "decrsaturate")
-                          (bAssign "next" (getLit f "decrsaturate"))]
+                 then [vIf (vStmt $ "underflow || next > " <> getAsLit f "decrsaturate")
+                          (bAssign "next" (getAsLit f "decrsaturate"))]
                  else []
 
       oflowChk = if isPropSet f "incrsaturate"
-                 then [vIf (vStmt $ "overflow || next > " <> getLit f "incrsaturate")
-                          (bAssign "next" (getLit f "incrsaturate"))]
+                 then [vIf (vStmt $ "overflow || next > " <> getAsLit f "incrsaturate")
+                          (bAssign "next" (getAsLit f "incrsaturate"))]
                  else []
 
-      upCtrBlock =    [vIf (vStmt (getLit f "incr")) (bAssign "{overflow, next}" ("next + " <> getLit f "incrvalue"))]
+      upCtrBlock =    [vIf (vStmt (getLit f "incr")) (bAssign "{overflow, next}" ("next + " <> getAsLit f "incrvalue"))]
                    ++ oflowChk
-                   ++ [bAssign "incrsaturate" ("next == " <> getLit f "incrsaturate")]
+                   ++ [bAssign "incrsaturate" ("next == " <> getAsLit f "incrsaturate")]
 
-      dwCtrBlock = [  vIf (vStmt (getLit f "incr")) (bAssign "{underflow, next}" ("next + " <> getLit f "decrvalue"))]
+      dwCtrBlock = [  vIf (vStmt (getLit f "incr")) (bAssign "{underflow, next}" ("next + " <> getAsLit f "decrvalue"))]
                    ++ uflowChk
-                   ++ [bAssign "decrsaturate" ("next == " <> getLit f "decrsaturate")]
+                   ++ [bAssign "decrsaturate" ("next == " <> getAsLit f "decrsaturate")]
 
-      udCtrBlock = [ bAssign "{wrap, next}" ("next -" <> getLit f "decrvalue" <> " + " <> getLit f "incrvalue")
-                   , vIf (vStmt "wrap") (vBlock Nothing [ bAssign "underflow" (getLit f "decrvalue" <> " > " <> getLit f "incrvalue")
+      udCtrBlock = [ bAssign "{wrap, next}" ("next -" <> getAsLit f "decrvalue" <> " + " <> getAsLit f "incrvalue")
+                   , vIf (vStmt "wrap") (vBlock Nothing [ bAssign "underflow" (getAsLit f "decrvalue" <> " > " <> getAsLit f "incrvalue")
                                                 , bAssign "overflow" "~underflow"])
                    ] ++ uflowChk ++ oflowChk
 
@@ -507,8 +533,12 @@ f' p d = go p
                                       return (if isJust prop then prop else d)
                                     else go xs
 
-isHWReadable f   = getEnum f "hw" `elem` ["rw", "wr", "r"]
-isHWWritable f   = getEnum f "hw" `elem` ["rw", "wr", "w"] ||
+writeType = S.fromList ["rw", "wr", "w"]
+readType = S.fromList ["rw", "wr", "r"]
+
+
+isHWReadable f   = S.member (getEnum f "hw") readType
+isHWWritable f   = S.member (getEnum f "hw") writeType ||
                    any (isPropActive f) ["we", "wel"]
 isIntr f         = snd (getIntr f "intr") /= NonIntr
 isCounter f      = getBool f "counter"
@@ -523,7 +553,7 @@ convertProps :: Fix ElabF -> State [VIO] (Fix ElabF)
 convertProps e = do
   ni <- mapM convertProps (e ^. _Fix . einst)
   let e' = e & _Fix . einst .~ ni
-  np <- M.traverseWithKey inspectProp (e' ^. _Fix . eprops)
+  np <- foldM inspectProp (e' ^. _Fix . eprops) l1
   let e'' = e' & _Fix . eprops .~ np
   when (e'' ^. _Fix . eext == Internal) $
      mapM_ (uncurry when)
@@ -531,48 +561,48 @@ convertProps e = do
        , (isField e && isHWWritable e'', addIO $ VIO Input (fn e <> "_wrdat") (getNum e "fieldwidth"))
        , (isField e && not (isHWReadable e''), addIO $ VIO InternalReg (fn e) (getNum e "fieldwidth"))
        , (isReg e   && isIntrReg e'',    addIO $ VIO Output (fn e <> "_intr") 1)
-       , (isField e && isIntrField e'',    addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
+       , (isField e && isIntrField e'',  addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
        , (isReg e   && isHaltReg e'',    addIO $ VIO Output (fn e <> "_halt") 1)
        ]
   return e''
-  where inspectProp :: Text -> Maybe PropRHS -> State [VIO] (Maybe PropRHS)
-        inspectProp k v =
-          case k `M.lookup` l1 of
-            Just a      -> f' a v
-            Nothing     -> return v
-        l1 = ML.fromList 
-               [ ("we",             [ ( isHWWritable e && (safeGetBool e "we" == Just True)
-                                      , Just (VIO Input (fn e <> "_" <>  "we") 1)
-                                      , Just (PropLit (fn e <> "_" <>  "we"))
-                                      )
-                                    ])
-               , ("incr",           [ ( isCounter e && not (isPropSet e "incr")
-                                      , Just (VIO Input (fn e <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
-                                      , Just (PropLit (fn e <> "_" <>  "incr"))
-                                      )
-                                    ])
-               , ("incrvalue",      [ ( isUpCounter e && isJust (safeGetNum e "incrwidth")
-                                      , Nothing
-                                      , Just (PropLit (fn e <> "_" <>  "incr"))
-                                      )
-                                    , ( isUpCounter e && not (isPropSet e "incrvalue")
-                                      , Nothing
-                                      , Just (PropLit "1")
-                                      )
-                                    ])
-               , ("incrsaturate",   [ ( isUpCounter e && not (isPropSet e "incrsaturate")
-                                      , Nothing
-                                      , Just (PropLit (onesF e))
-                                      )
-                                    ])
-               , ("incrthreshold",  [ ( isUpCounter e && (safeGetBool e "incrthreshold" == Just True)
-                                      , Nothing
-                                      , Just (PropLit (onesF e))
-                                      )
-                                    ])
-               , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output (fn e <> "_" <>  "swmod") 1), Nothing) ])
-               , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output (fn e <> "_" <>  "swacc") 1), Nothing) ])
-               ]
+  where inspectProp :: M.Map Text (Maybe PropRHS) -> (Text, [(Bool, Maybe VIO, Maybe PropRHS)]) -> State [VIO] (M.Map Text (Maybe PropRHS))
+        inspectProp m (k, act) =
+          case k `M.lookup` m of
+            Just a      -> f' act a >>= \x -> return $ M.insert k x m
+            Nothing     -> return m
+        upC = isUpCounter e
+        l1 = [ ("we",             [ ( isHWWritable e && (safeGetBool e "we" == Just True)
+                                    , Just (VIO Input (fn e <> "_" <>  "we") 1)
+                                    , Just (PropLit (fn e <> "_" <>  "we"))
+                                    )
+                                  ])
+             , ("incr",           [ ( isCounter e && not (isPropSet e "incr")
+                                    , Just (VIO Input (fn e <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
+                                    , Just (PropLit (fn e <> "_" <>  "incr"))
+                                    )
+                                  ])
+             , ("incrvalue",      [ ( upC && isJust (safeGetNum e "incrwidth")
+                                    , Nothing
+                                    , Just (PropLit (fn e <> "_" <>  "incr"))
+                                    )
+                                  , ( upC && not (isPropSet e "incrvalue")
+                                    , Nothing
+                                    , Just (PropLit "1")
+                                    )
+                                  ])
+             , ("incrsaturate",   [ ( upC && not (isPropSet e "incrsaturate")
+                                    , Nothing
+                                    , Just (PropLit (onesF e))
+                                    )
+                                  ])
+             , ("incrthreshold",  [ ( upC && (safeGetBool e "incrthreshold" == Just True)
+                                    , Nothing
+                                    , Just (PropLit (onesF e))
+                                    )
+                                  ])
+             , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output (fn e <> "_" <>  "swmod") 1), Nothing) ])
+             , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output (fn e <> "_" <>  "swacc") 1), Nothing) ])
+             ]
 
 pushPostProp :: Fix ElabF -> Fix ElabF
 pushPostProp e = foldl (.) id (map f $ e ^. _Fix . epostProps)
@@ -609,12 +639,15 @@ getElem t fe e =
 
 getFields = getElem isField NotSpec
 
+
 verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) (addExt es io), wires io, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
    where rs = getElem isReg   Internal x''
          fs = getElem isField Internal x''
          es = filterExt x'
-         x'  = (pushPostProp . pushOffset 0) (evalState (fqName x) [])
+         x'  = (pushPostProp . pushOffset 0) (evalState (fqName (pruneMap Addrmap x)) [])
          (x'', io) = runState (convertProps x') initIO
 
+pruneMap :: CompType -> Fix ElabF -> Fix ElabF
+pruneMap t e = (e & _Fix . einst %~ filter (\x -> x ^. _Fix . etype /= t)) & _Fix . einst . traverse %~ pruneMap t
 
 

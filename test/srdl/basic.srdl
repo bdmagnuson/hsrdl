@@ -1,0 +1,17 @@
+addrmap test {
+   reg bb {
+      field {} a;
+   } bb;
+
+   reg cc {
+     field {hw=rw;} b;
+   } cc;
+
+   cc.b->we = bb.a;
+
+
+};
+
+addrmap top {
+   test sub;
+};

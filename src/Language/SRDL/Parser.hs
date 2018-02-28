@@ -62,7 +62,7 @@ rword w = marker (rword' w)
 braces = between lbrace rbrace
 
 marker :: SrdlParser a -> SrdlParser a
-marker p = hidden (optional (L.lexeme sc m)) >> p
+marker p = hidden (optional (many (L.lexeme sc m))) >> p
   where m :: SrdlParser ()
         m = do
              string "##"
@@ -112,7 +112,7 @@ parseCompDef = do
    cType <- parseCompType
    name  <- parseCompName
    expr  <- braces $ many parseExpr
-   anon  <- many parseCompInst
+   anon  <- parseCompInst `sepBy` comma
    semi
    return $ pos :< CompDef ext cType name expr anon
 
@@ -242,8 +242,10 @@ parsePropDef = do
    semi
    return $ pos :< PropDef id t c d
 
-parseNumeric' = lexeme L.decimal
-parseNumeric = marker parseNumeric'
+parseNumeric = marker (lexeme parseNumeric')
+parseNumeric' =
+      try (char '0' >> char' 'x' >> L.hexadecimal)
+  <|> L.decimal
 
 
 parseRHS :: Text -> SrdlParser PropRHS

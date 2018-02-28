@@ -9,7 +9,6 @@ module Language.SRDL.SymbolTable (
 
 import qualified Data.Map.Strict as M
 import Control.Lens
-import Control.Lens.At
 
 import qualified Data.Text as T
 import Data.Text (Text)

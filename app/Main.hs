@@ -20,8 +20,6 @@ data Args = Args
   , outputDir :: String
   , svOutput  :: Bool
   , uvmOutput :: Bool
-  , svFile    :: [(String, String)]
-  , uvmFile   :: [(String, String)]
   }
 
 doit :: Args -> IO ()
@@ -29,9 +27,8 @@ doit args = do
   srdl <- readSRDL (input args)
   mapM_ f (M.toList srdl)
   where f (n, s) = do
-             when (svOutput  args) $ writeVerilog (oName (unpack n) (svFile args) "_regs.sv")  s
-             when (uvmOutput args) $ writeUVM     (oName (unpack n) (uvmFile args) "_uvm_regs.sv") s
-        oName n m s = fromMaybe (n ++ s) (L.lookup n m)
+             when (svOutput  args) $ writeVerilog s
+             when (uvmOutput args) $ writeUVM     n s
 
 main :: IO ()
 main = doit =<< execParser (info opts fullDesc)
@@ -40,8 +37,6 @@ main = doit =<< execParser (info opts fullDesc)
                 <*> strOption (long "output" <> metavar "DIR" <> help "Output directory" <> value ".")
                 <*> switch (long "sv")
                 <*> switch (long "uvm")
-                <*> (many ((option fileOption) (long "svfile"  <> metavar "MAP:FILE" <> help "SV")))
-                <*> (many ((option fileOption) (long "uvmfile"  <> metavar "MAP:FILE" <> help "SV")))
     fileOption = maybeReader (P.parseMaybe p)
     p :: P.ParsecT (P.ErrorFancy Void) String Identity (String, String)
     p = do

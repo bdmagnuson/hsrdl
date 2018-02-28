@@ -6,7 +6,6 @@ module Language.SRDL.Props (
        defDefs
      , getPropType
      , checktype
-     , addProperty
      , typeOf
      , isEnum
      , getEnumValues
@@ -46,19 +45,21 @@ typeOf (PropRef _ _)   = PropRefT
 typeOf (PropIntr _ _)  = PropIntrT
 typeOf (PropEnum _)    = PropEnumT
 
-checktype :: PropType -> PropRHS -> Bool
-checktype x y = x == typeOf y
+checktype :: [PropType] -> PropRHS -> Bool
+checktype x y = typeOf y `elem` x
 
 accessType = EnumDef (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na", 4)])
 
 assignProp k v = M.insert k (Just v)
 
-defFalse     = Property PropBoolT (Just (PropBool False))
-defNum n     = Property PropNumT (Just (PropNum n))
-defLit n     = Property PropLitT (Just (PropLit n))
+defFalse     = Property [PropBoolT] (Just (PropBool False))
+defNum n     = Property [PropNumT] (Just (PropNum n))
+defLit n     = Property [PropLitT] (Just (PropLit n))
 defNothing a = Property a Nothing
-defEnum d    = Property PropEnumT (Just (PropEnum d))
-defIntr      = Property PropIntrT (Just (PropIntr NonSticky NonIntr))
+defEnum d    = Property [PropEnumT] (Just (PropEnum d))
+defIntr      = Property [PropIntrT] (Just (PropIntr NonSticky NonIntr))
+
+addRef (Property xs d) = Property (xs ++ [PropRefT]) d
 
 isEnum prop = prop `elem` (["hw", "sw", "priority", "precedence", "addressing"] :: [Text])
 
@@ -68,8 +69,8 @@ getEnumValues "sw" | (EnumDef m) <- accessType = M.keys m
 p_intr          = ("intr",          defIntr)
 p_hw            = ("hw",            defEnum "r")
 p_sw            = ("sw",            defEnum "rw")
-p_name          = ("name",          defNothing PropLitT)
-p_desc          = ("desc",          defNothing PropLitT)
+p_name          = ("name",          defNothing [PropLitT])
+p_desc          = ("desc",          defNothing [PropLitT])
 p_reset         = ("reset",         defNum 0)
 p_fieldwidth    = ("fieldwidth",    defNum 0)
 p_counter       = ("counter",       defFalse)
@@ -83,26 +84,26 @@ p_nonsticky     = ("nonsticky",     defFalse)
 p_sticky        = ("sticky",        defFalse)
 p_stickybit     = ("stickybit",     defFalse)
 p_woset         = ("woset",         defFalse)
-p_we            = ("we",            defFalse)
+p_we            = ("we",            addRef defFalse)
 p_wel           = ("wel",           defFalse)
 p_swacc         = ("swacc",         defFalse)
 p_swmod         = ("swmod",         defFalse)
 p_sharedextbus  = ("sharedextbus",  defFalse)
 p_singlepulse   = ("singlepulse",   defFalse)
 p_regwidth      = ("regwidth",      defNum 32)
-p_incrsaturate  = ("incrsaturate",  defNothing PropNumT)
-p_decrsaturate  = ("decrsaturate",  defNothing PropNumT)
-p_incrthreshold = ("incrthreshold", defNothing PropNumT)
-p_decrthreshold = ("decrthreshold", defNothing PropNumT)
-p_incr          = ("incr",          defNothing PropRefT)
-p_incrwidth     = ("incrwidth",     defNothing PropNumT)
-p_decrwidth     = ("decrwidth",     defNothing PropNumT)
-p_incrvalue     = ("incrvalue",     defNothing PropNumT)
-p_decrvalue     = ("decrvalue",     defNothing PropNumT)
-p_enable        = ("enable",        defNothing PropRefT)
-p_enablemask    = ("enablemask",    defNothing PropRefT)
-p_haltenable    = ("haltenable",    defNothing PropRefT)
-p_haltmask      = ("haltmask",      defNothing PropRefT)
+p_incrsaturate  = ("incrsaturate",  defNothing [PropNumT])
+p_decrsaturate  = ("decrsaturate",  defNothing [PropNumT])
+p_incrthreshold = ("incrthreshold", defNothing [PropNumT])
+p_decrthreshold = ("decrthreshold", defNothing [PropNumT])
+p_incr          = ("incr",          defNothing [PropRefT])
+p_incrwidth     = ("incrwidth",     defNothing [PropNumT])
+p_decrwidth     = ("decrwidth",     defNothing [PropNumT])
+p_incrvalue     = ("incrvalue",     defNothing [PropNumT])
+p_decrvalue     = ("decrvalue",     defNothing [PropNumT])
+p_enable        = ("enable",        defNothing [PropRefT])
+p_enablemask    = ("enablemask",    defNothing [PropRefT])
+p_haltenable    = ("haltenable",    defNothing [PropRefT])
+p_haltmask      = ("haltmask",      defNothing [PropRefT])
 
 
 isPropSet :: Fix ElabF -> Text -> Bool
@@ -118,12 +119,7 @@ getPropType :: Text -> Maybe PropType
 getPropType p = do
     compProps <- M.lookup Field defDefs
     prop <- M.lookup p compProps
-    return $ prop ^. ptype
-
-
-addProperty p n = foldl (addCompProperty n) p (ctypes n)
-
-addCompProperty n p c = p & (at c . _Just . at (name n)) ?~ Property (propType n) (value n)
+    return $ head (prop ^. ptype)
 
 defDefs = M.fromList [
    (Field,   M.fromList [ p_we
