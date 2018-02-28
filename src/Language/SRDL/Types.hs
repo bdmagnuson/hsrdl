@@ -168,7 +168,7 @@ instance Show PropType where
   show PropEnumT = "Enumeration"
 
 data IsSticky = Sticky | StickyBit | NonSticky deriving (Show, Eq)
-data IntrType = NonIntr | Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
+data IntrType = Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
 
 data PropRHS =
      PropLit  Text

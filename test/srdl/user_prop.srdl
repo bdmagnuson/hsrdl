@@ -17,7 +17,7 @@ addrmap test {
 
    realdef moreinst[5];
 
-   `include "${INCLUDE}"
+   `include "test/srdl/include.srdl"
 
    `foo moreinst1;
 

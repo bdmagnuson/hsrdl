@@ -57,7 +57,7 @@ defNum n     = Property [PropNumT] (Just (PropNum n))
 defLit n     = Property [PropLitT] (Just (PropLit n))
 defNothing a = Property a Nothing
 defEnum d    = Property [PropEnumT] (Just (PropEnum d))
-defIntr      = Property [PropIntrT] (Just (PropIntr NonSticky NonIntr))
+--defIntr      = Property [PropIntrT] (Just (PropIntr NonSticky NonIntr))
 
 addRef (Property xs d) = Property (xs ++ [PropRefT]) d
 
@@ -66,7 +66,7 @@ isEnum prop = prop `elem` (["hw", "sw", "priority", "precedence", "addressing"] 
 getEnumValues "hw" | (EnumDef m) <- accessType = M.keys m
 getEnumValues "sw" | (EnumDef m) <- accessType = M.keys m
 
-p_intr          = ("intr",          defIntr)
+p_intr          = ("intr",          defNothing [PropIntrT])
 p_hw            = ("hw",            defEnum "r")
 p_sw            = ("sw",            defEnum "rw")
 p_name          = ("name",          defNothing [PropLitT])

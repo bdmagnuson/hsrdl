@@ -242,7 +242,6 @@ elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
                               return $ e & _Just . _Fix . eprops . ix p .~
                                 case getPropType p of
                                   Just PropBoolT -> Just (PropBool False)
-                                  Just PropIntrT -> Just (PropIntr NonSticky NonIntr)
                                   _              -> Nothing
 
                       else return e

@@ -414,7 +414,7 @@ fieldIntrUpdate :: Fix ElabF -> Maybe (Fix VlogF)
 fieldIntrUpdate f =
    if not (isIntrField f)
    then Nothing
-   else Just $ bAssign "intr" (case intrType f of
+   else Just $ bAssign "intr" (case snd (getIntr f "intr") of
                                 Level    -> "|next"
                                 Posedge  -> "|(next & ~" <> prev
                                 Negedge  -> "|(~next & " <> prev
@@ -475,8 +475,7 @@ fieldCTRUpdate f =
                          , (vStmt ("2'b11" :: Text), vBlock Nothing udCtrBlock)]]
 
 
-intrType f    = snd (getIntr f "intr")
-isIntrField f = intrType f /= NonIntr
+isIntrField f = isJust (safeGetIntr f "intr")
 isIntrReg r   = any isIntrField (r ^. _Fix . einst)
 
 isHaltField f = any (isPropSet f) ["haltenable", "haltmask"]
@@ -540,7 +539,6 @@ readType = S.fromList ["rw", "wr", "r"]
 isHWReadable f   = S.member (getEnum f "hw") readType
 isHWWritable f   = S.member (getEnum f "hw") writeType ||
                    any (isPropActive f) ["we", "wel"]
-isIntr f         = snd (getIntr f "intr") /= NonIntr
 isCounter f      = getBool f "counter"
 isUpCounter f    = getBool f "counter" && (anyIncrSet f || not (anyDecrSet f))
 isDownCounter f  = getBool f "counter" && anyDecrSet f
@@ -640,12 +638,13 @@ getElem t fe e =
 getFields = getElem isField NotSpec
 
 
-verilog x = P.vcat $ map pretty [header (x ^. _Fix . ename) (addExt es io), wires io, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
+verilog x = P.vcat $ map pretty [header modName (addExt es io), wires io, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
    where rs = getElem isReg   Internal x''
          fs = getElem isField Internal x''
          es = filterExt x'
          x'  = (pushPostProp . pushOffset 0) (evalState (fqName (pruneMap Addrmap x)) [])
          (x'', io) = runState (convertProps x') initIO
+         modName = (x ^. _Fix . escope) !! 1 <> "_regs"
 
 pruneMap :: CompType -> Fix ElabF -> Fix ElabF
 pruneMap t e = (e & _Fix . einst %~ filter (\x -> x ^. _Fix . etype /= t)) & _Fix . einst . traverse %~ pruneMap t
