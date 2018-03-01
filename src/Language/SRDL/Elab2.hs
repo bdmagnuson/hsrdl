@@ -22,6 +22,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
 import Debug.Trace
+import Data.List (foldl', foldl1')
 
 import Data.Functor.Foldable
 import Data.Maybe (isJust, fromMaybe, fromJust)
@@ -32,6 +33,7 @@ import Language.SRDL.Props
 import Language.SRDL.Parser
 import Language.SRDL.Types
 import qualified Language.SRDL.SymbolTable as ST
+import qualified Data.HashMap.Strict as HM
 
 
 data Msgs = Msgs {
@@ -193,7 +195,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
      env <- ask
      pushDefs
      when (ctype def == Reg) resetBits
-     inst <- withReaderT newenv $ foldl (>>=) initInst (map elaborate (expr def))
+     inst <- withReaderT newenv $ foldl' (>>=) initInst (map elaborate (expr def))
      popDefs
      setVisability (ext def) inst
      where newenv = scope .~ (sc ++ [d])
@@ -202,7 +204,7 @@ instantiate (pos :< CompInst iext d n arr align) = do
              (return . Just . Fix) ElabF
                { _etype      = ctype def
                , _ename      = n
-               , _eprops     = (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
+               , _eprops     = (HM.fromList . M.toList) $ (head sp ^. ix (ctype def)) & traverse %~ (^. pdefault)
                , _epostProps = []
                , _einst      = []
                , _ealign     = align
@@ -232,7 +234,7 @@ elaborate ins@(pos :< CompInst _ cd cn _ _) (Just i) = do
 elaborate (pos :< PropAssign [] prop rhs) (Just e) = do
    legal <- checkAssign pos (e ^? _Fix) prop rhs
    case legal of
-     Just () -> foldl (>>=) ((return . Just) $ e &  _Fix . eprops %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
+     Just () -> foldl' (>>=) ((return . Just) $ e &  _Fix . eprops %~ assignProp prop rhs) [cExclusive p | p <- fromMaybe [] (M.lookup prop exMap)]
      Nothing -> return Nothing
    where
      cExclusive p Nothing = return Nothing
@@ -321,7 +323,7 @@ type TopState = ([Text], ST.SymTab (Expr SourcePos), M.Map CompType (M.Map Text 
 -- Could use ReaderT
 
 findTop' :: Expr SourcePos -> State TopState ()
-findTop' (_ :< TopExpr a) = foldl1 (>>) (map (findTop True [""]) a)
+findTop' (_ :< TopExpr a) = foldl1' (>>) (map (findTop True [""]) a)
 
 findTop :: Bool -> [Text] -> Expr SourcePos -> State TopState ()
 

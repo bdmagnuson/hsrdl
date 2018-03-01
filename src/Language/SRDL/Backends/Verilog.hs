@@ -7,7 +7,7 @@ module Language.SRDL.Backends.Verilog
   ) where
 
 import Control.Lens
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Data.Functor.Foldable
 import Data.Text.Lazy (toStrict)
 import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
@@ -23,6 +23,8 @@ import Text.Heterocephalus
 import Text.Show.Deriving
 import Debug.Trace
 import Data.Maybe (catMaybes, fromMaybe, isJust, fromJust)
+import Data.List (foldl')
+import qualified Data.HashMap.Strict as HM
 
 import Language.SRDL.Elab2
 import Language.SRDL.Props
@@ -41,19 +43,19 @@ makeLenses ''ExtInfo
 data RegsFilter = FilterInternal | FilterExternal | FilterNone
 
 
-getProp t e p =
-  case e ^? _Fix . eprops . ix p . _Just . t of
-    Just b -> b
-    _ -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, p)) (error "you dun f'd up")
-   where
-     a = e ^? _Fix . eprops . ix p . _Just
-
-getBool = getProp _PropBool
-getNum  = getProp _PropNum
-getEnum = getProp _PropEnum
-getIntr = getProp _PropIntr
-getRef  = getProp _PropRef
-getLit  = getProp _PropLit
+--getProp t e p =
+--  case e ^? _Fix . eprops . ix p . _Just . t of
+--    Just b -> b
+--    _ -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, p)) (error "you dun f'd up")
+--   where
+--     a = e ^? _Fix . eprops . ix p . _Just
+--
+--getBool = getProp _PropBool
+--getNum  = getProp _PropNum
+--getEnum = getProp _PropEnum
+--getIntr = getProp _PropIntr
+--getRef  = getProp _PropRef
+--getLit  = getProp _PropLit
 
 getAsLit e p =
    case e ^? _Fix . eprops . ix p . _Just of
@@ -64,18 +66,19 @@ getAsLit e p =
       Just (PropLit a) -> a
       _ -> error "got a problem"
 
---getProp e p = e ^. _Fix . eprops . at p
---
---getBool e p = case getProp e p of
---                Just (Just (PropBool b)) -> b
---getNum  e p = case getProp e p of
---                Just (Just (PropNum b)) -> b
---getEnum e p = case getProp e p of
---                Just (Just (PropEnum b)) -> b
---getIntr e p = case getProp e p of
---                Just (Just (PropIntr a b)) -> (a, b)
---getLit e p = case getProp e p of
---                Just (Just (PropLit b)) -> b
+--Doing it this way yields a performance benefit
+getProp (Fix e) p = e ^. eprops . at p
+
+getBool e p = case getProp e p of
+                Just (Just (PropBool b)) -> b
+getNum  e p = case getProp e p of
+                Just (Just (PropNum b)) -> b
+getEnum e p = case getProp e p of
+                Just (Just (PropEnum b)) -> b
+getIntr e p = case getProp e p of
+                Just (Just (PropIntr a b)) -> (a, b)
+getLit e p = case getProp e p of
+                Just (Just (PropLit b)) -> b
 --getRef e p = case getProp e p of
 --                Just (Just (PropRef b)) -> b
 
@@ -158,7 +161,7 @@ header n ios = pretty2text $ pt "`default_nettype none" <> P.line <> pt "module"
     p _ = True
 
 addExt :: [ExtInfo] -> [VIO] -> [VIO]
-addExt = flip (foldl go)
+addExt = flip (foldl' go)
   where go io e = [ VIO Output ((e ^. xname) <> "_rd") 1
                   , VIO Output ((e ^. xname) <> "_wr") 1
                   , VIO Output ((e ^. xname) <> "_addr") (clog2 (e ^. xlast - e ^. xbase + 1))
@@ -503,7 +506,7 @@ pushOffset o e =
 
 
 data IODir = Input | Output | Inout | InternalReg deriving (Show)
-data VIO = VIO IODir Text Integer deriving (Show)
+data VIO = VIO !IODir !Text !Integer deriving (Show)
 
 addIO :: VIO -> State [VIO] ()
 addIO v = modify (\x -> v:x)
@@ -549,61 +552,65 @@ anyDecrSet f = any (isPropSet f) ["decr", "decrsaturate", "decrthreshold"]
 --Add IO as needed
 convertProps :: Fix ElabF -> State [VIO] (Fix ElabF)
 convertProps e = do
-  ni <- mapM convertProps (e ^. _Fix . einst)
-  let e' = e & _Fix . einst .~ ni
-  np <- foldM inspectProp (e' ^. _Fix . eprops) l1
-  let e'' = e' & _Fix . eprops .~ np
-  when (e'' ^. _Fix . eext == Internal) $
+  np <- foldM inspectProp (e ^. _Fix . eprops) (l1 e)
+  let e' = e & _Fix . eprops .~ np
+  when (e' ^. _Fix . eext == Internal) $
      mapM_ (uncurry when)
-       [ (isField e && isHWReadable e'', addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
-       , (isField e && isHWWritable e'', addIO $ VIO Input (fn e <> "_wrdat") (getNum e "fieldwidth"))
-       , (isField e && not (isHWReadable e''), addIO $ VIO InternalReg (fn e) (getNum e "fieldwidth"))
-       , (isReg e   && isIntrReg e'',    addIO $ VIO Output (fn e <> "_intr") 1)
-       , (isField e && isIntrField e'',  addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
-       , (isReg e   && isHaltReg e'',    addIO $ VIO Output (fn e <> "_halt") 1)
+       [ (isField e && isHWReadable e', addIO $ VIO Output (fn e) (getNum e "fieldwidth"))
+       , (isField e && isHWWritable e', addIO $ VIO Input (fn e <> "_wrdat") (getNum e "fieldwidth"))
+       , (isField e && not (isHWReadable e'), addIO $ VIO InternalReg (fn e) (getNum e "fieldwidth"))
+       , (isReg e   && isIntrReg e',    addIO $ VIO Output (fn e <> "_intr") 1)
+       , (isField e && isIntrField e',  addIO $ VIO InternalReg ("_r_" <> fn e <> "_sticky") (getNum e "fieldwidth"))
+       , (isReg e   && isHaltReg e',    addIO $ VIO Output (fn e <> "_halt") 1)
        ]
-  return e''
-  where inspectProp :: M.Map Text (Maybe PropRHS) -> (Text, [(Bool, Maybe VIO, Maybe PropRHS)]) -> State [VIO] (M.Map Text (Maybe PropRHS))
+  ni <- mapM convertProps (e' ^. _Fix . einst)
+  return $ e' & _Fix . einst .~ ni
+
+  where inspectProp ::    HM.HashMap Text (Maybe PropRHS)
+                       -> (Text, [(Bool, Maybe VIO, Maybe PropRHS)])
+                       -> State [VIO] (HM.HashMap Text (Maybe PropRHS))
         inspectProp m (k, act) =
-          case k `M.lookup` m of
-            Just a      -> f' act a >>= \x -> return $ M.insert k x m
+          case k `HM.lookup` m of
+            Just a      -> f' act a >>= \x -> return $ HM.insert k x m
             Nothing     -> return m
+
+l1 e = [ ("we",             [ ( isHWWritable e && (safeGetBool e "we" == Just True)
+                            , Just (VIO Input (fn e <> "_" <>  "we") 1)
+                            , Just (PropLit (fn e <> "_" <>  "we"))
+                            )
+                          ])
+     , ("incr",           [ ( isCounter e && not (isPropSet e "incr")
+                            , Just (VIO Input (fn e <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
+                            , Just (PropLit (fn e <> "_" <>  "incr"))
+                            )
+                          ])
+     , ("incrvalue",      [ ( upC && isJust (safeGetNum e "incrwidth")
+                            , Nothing
+                            , Just (PropLit (fn e <> "_" <>  "incr"))
+                            )
+                          , ( upC && not (isPropSet e "incrvalue")
+                            , Nothing
+                            , Just (PropLit "1")
+                            )
+                          ])
+     , ("incrsaturate",   [ ( upC && not (isPropSet e "incrsaturate")
+                            , Nothing
+                            , Just (PropLit (onesF e))
+                            )
+                          ])
+     , ("incrthreshold",  [ ( upC && (safeGetBool e "incrthreshold" == Just True)
+                            , Nothing
+                            , Just (PropLit (onesF e))
+                            )
+                          ])
+     , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output (fn e <> "_" <>  "swmod") 1), Nothing) ])
+     , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output (fn e <> "_" <>  "swacc") 1), Nothing) ])
+     ]
+     where
         upC = isUpCounter e
-        l1 = [ ("we",             [ ( isHWWritable e && (safeGetBool e "we" == Just True)
-                                    , Just (VIO Input (fn e <> "_" <>  "we") 1)
-                                    , Just (PropLit (fn e <> "_" <>  "we"))
-                                    )
-                                  ])
-             , ("incr",           [ ( isCounter e && not (isPropSet e "incr")
-                                    , Just (VIO Input (fn e <> "_" <>  "incr") (fromMaybe 1 (safeGetNum e "incrwidth")))
-                                    , Just (PropLit (fn e <> "_" <>  "incr"))
-                                    )
-                                  ])
-             , ("incrvalue",      [ ( upC && isJust (safeGetNum e "incrwidth")
-                                    , Nothing
-                                    , Just (PropLit (fn e <> "_" <>  "incr"))
-                                    )
-                                  , ( upC && not (isPropSet e "incrvalue")
-                                    , Nothing
-                                    , Just (PropLit "1")
-                                    )
-                                  ])
-             , ("incrsaturate",   [ ( upC && not (isPropSet e "incrsaturate")
-                                    , Nothing
-                                    , Just (PropLit (onesF e))
-                                    )
-                                  ])
-             , ("incrthreshold",  [ ( upC && (safeGetBool e "incrthreshold" == Just True)
-                                    , Nothing
-                                    , Just (PropLit (onesF e))
-                                    )
-                                  ])
-             , ("swmod",          [ ( getBool e "swmod" , Just (VIO Output (fn e <> "_" <>  "swmod") 1), Nothing) ])
-             , ("swacc",          [ ( getBool e "swacc" , Just (VIO Output (fn e <> "_" <>  "swacc") 1), Nothing) ])
-             ]
 
 pushPostProp :: Fix ElabF -> Fix ElabF
-pushPostProp e = foldl (.) id (map f $ e ^. _Fix . epostProps)
+pushPostProp e = foldl' (.) id (map f $ e ^. _Fix . epostProps)
                               (e & _Fix . einst . traverse %~ pushPostProp)
 
    where f (path, t, prop, rhs) =
@@ -643,6 +650,7 @@ verilog x = P.vcat $ map pretty [header modName (addExt es io), wires io, readMu
          fs = getElem isField Internal x''
          es = filterExt x'
          x'  = (pushPostProp . pushOffset 0) (evalState (fqName (pruneMap Addrmap x)) [])
+         --x'' = convertProps' x'
          (x'', io) = runState (convertProps x') initIO
          modName = (x ^. _Fix . escope) !! 1 <> "_regs"
 

@@ -34,6 +34,8 @@ import Data.Monoid ((<>))
 import Data.Maybe (fromMaybe, isJust, fromJust)
 import Control.Monad (msum)
 import Debug.Trace
+import Data.List (foldl')
+import qualified Data.HashMap.Strict as HM
 
 import Language.SRDL.Types
 
@@ -50,7 +52,7 @@ checktype x y = typeOf y `elem` x
 
 accessType = EnumDef (M.fromList [("rw", 0), ("wr", 1), ("r", 2), ("w", 3), ("na", 4)])
 
-assignProp k v = M.insert k (Just v)
+assignProp k v = HM.insert k (Just v)
 
 defFalse     = Property [PropBoolT] (Just (PropBool False))
 defNum n     = Property [PropNumT] (Just (PropNum n))
@@ -162,7 +164,7 @@ defDefs = M.fromList [
                         , p_haltmask
                         ]),
 
-   (Reg,     M.fromList [ p_desc
+   (Reg,    M.fromList [ p_desc
                         , p_name
                         , p_intr
                         , p_sharedextbus
@@ -182,8 +184,8 @@ defDefs = M.fromList [
 
 
 exMap :: M.Map Text [Text]
-exMap = foldl M.union M.empty (map f exSets)
-  where f x = foldl (.) id [M.insert k (delete k x) | k <- x] M.empty
+exMap = foldl' M.union M.empty (map f exSets)
+  where f x = foldl' (.) id [M.insert k (delete k x) | k <- x] M.empty
         exSets =
           [ ["activehigh", "activelow"]
           , ["woclr", "woset"]
@@ -276,7 +278,7 @@ instance Ixed (Fix ElabF) where
                 (_, []) -> pure m
                 (i, l:ls) -> f l <&> \x -> Fix $ unfix m & einst .~ (i ++ (x:ls))
 
-buildTraversal e x = foldl (>>=) (Right $ Traversal id) (map f x)
+buildTraversal e x = foldl' (>>=) (Right $ Traversal id) (map f x)
   where f y x =
          case e ^? (runTraversal x . ix y) of
             Nothing -> Left y

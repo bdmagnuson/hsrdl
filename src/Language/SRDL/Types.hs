@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -53,6 +54,7 @@ import Data.Text (Text)
 
 import Text.Show.Deriving
 import Data.Eq.Deriving
+import qualified Data.HashMap.Strict as HM
 
 import Data.Text.Prettyprint.Doc ((<>), (<+>), pretty)
 import qualified Data.Text.Prettyprint.Doc as P
@@ -171,12 +173,12 @@ data IsSticky = Sticky | StickyBit | NonSticky deriving (Show, Eq)
 data IntrType = Level | Posedge | Negedge | Bothedge deriving (Show, Eq)
 
 data PropRHS =
-     PropLit  Text
-   | PropNum  Integer
-   | PropBool Bool
-   | PropRef  [PathElem] (Maybe Identifier)
-   | PropIntr IsSticky IntrType
-   | PropEnum Identifier deriving (Show,Eq)
+     PropLit  !Text
+   | PropNum  !Integer
+   | PropBool !Bool
+   | PropRef  ![PathElem] (Maybe Identifier)
+   | PropIntr !IsSticky !IntrType
+   | PropEnum !Identifier deriving (Show,Eq)
 
 instance P.Pretty PropRHS where
    pretty (PropLit a)    = pretty a
@@ -202,17 +204,17 @@ instance (a ~ Fix ElabF) => Show (ReifiedTraversal a a a a) where
    show a = show ""
 
 data ElabF a = ElabF {
-    _etype      :: CompType,
-    _ename      :: Text,
-    _eprops     :: M.Map Text (Maybe PropRHS),
-    _epostProps :: [([PathElem], ReifiedTraversal (Fix ElabF) (Fix ElabF) (Fix ElabF) (Fix ElabF), Text, PropRHS)],
-    _einst      :: [a],
-    _ealign     :: Alignment,
-    _eoffset    :: Integer,
-    _escope     :: [Text],
-    _estride    :: Integer,
-    _eext       :: Implementation
-} deriving (Functor)
+    _etype      :: !CompType,
+    _ename      :: !Text,
+    _eprops     :: !(HM.HashMap Text (Maybe PropRHS)),
+    _epostProps :: ![([PathElem], ReifiedTraversal (Fix ElabF) (Fix ElabF) (Fix ElabF) (Fix ElabF), Text, PropRHS)],
+    _einst      :: ![a],
+    _ealign     :: !Alignment,
+    _eoffset    :: !Integer,
+    _escope     :: ![Text],
+    _estride    :: !Integer,
+    _eext       :: !Implementation
+} deriving (Functor, Foldable, Traversable)
 
 
 $(makePrisms ''Fix)

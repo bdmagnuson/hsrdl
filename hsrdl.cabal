@@ -39,6 +39,7 @@ library
                      , shakespeare
                      , heterocephalus
                      , blaze-markup
+                     , unordered-containers
   default-language:    Haskell2010
 
 executable hsrdl

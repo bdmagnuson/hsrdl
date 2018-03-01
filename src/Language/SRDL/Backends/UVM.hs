@@ -21,6 +21,7 @@ import Data.Function (on)
 import qualified Language.SRDL.SymbolTable as ST
 import Language.SRDL.Types
 import Language.SRDL.Props
+import Data.List (foldl', foldl1')
 
 generateUVM :: Text -> ST.SymTab (Fix ElabF) -> P.Doc Text
 generateUVM n e = P.vcat [header, classes e, footer]
@@ -44,7 +45,7 @@ baseClass inst =
       Array   -> "array"
       _       -> error $ show  (inst ^. _Fix . etype)
 
-delim = foldl1 (\x y -> x <> ("_" :: Text) <> y) . tail
+delim = foldl1' (\x y -> x <> ("_" :: Text) <> y) . tail
 sname i = pretty $ delim (i ^. _Fix . escope)
 
 pt :: Text -> P.Doc ann
