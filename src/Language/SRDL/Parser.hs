@@ -130,8 +130,6 @@ parseRsvdRet a b = do
    try (rword a)
    return b
 
---parseRsvdRet a b = marker (parseRsvdRet' a b)
-
 parseExpCompInst' = do
    pos  <- getPosition
    ext  <- option NotSpec (parseRsvdRet "external" External <|> parseRsvdRet "internal" Internal)

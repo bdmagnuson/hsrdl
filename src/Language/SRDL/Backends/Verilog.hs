@@ -649,12 +649,21 @@ verilog x = P.vcat $ map pretty [header modName (addExt es io), wires io, readMu
    where rs = getElem isReg   Internal x''
          fs = getElem isField Internal x''
          es = filterExt x'
-         x'  = (pushPostProp . pushOffset 0) (evalState (fqName (pruneMap Addrmap x)) [])
-         --x'' = convertProps' x'
-         (x'', io) = runState (convertProps x') initIO
+         x'  = (pushPostProp . pushOffset 0) (evalState (fqName (pruneComp Addrmap x)) [])
+         (x'', io) = runState (convertProps (pruneExt x')) initIO
          modName = (x ^. _Fix . escope) !! 1 <> "_regs"
 
-pruneMap :: CompType -> Fix ElabF -> Fix ElabF
-pruneMap t e = (e & _Fix . einst %~ filter (\x -> x ^. _Fix . etype /= t)) & _Fix . einst . traverse %~ pruneMap t
+
+pruneAST :: (Fix ElabF -> Bool) -> Fix ElabF -> Fix ElabF
+pruneAST p e = (e & _Fix . einst %~ filter p) & _Fix . einst . traverse %~ pruneAST p
+
+pruneComp :: CompType -> Fix ElabF -> Fix ElabF
+pruneComp t = pruneAST (\x -> x ^. _Fix . etype /= t)
+
+pruneExt :: Fix ElabF -> Fix ElabF
+pruneExt = pruneAST (\x -> x ^. _Fix . eext /= External)
+
+
+
 
 
