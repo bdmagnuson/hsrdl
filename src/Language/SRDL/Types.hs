@@ -23,6 +23,10 @@ module Language.SRDL.Types (
  , AccessType (..)
  , AccessBehavior (..)
  , Implementation (..)
+ , getFields
+ , getRegs
+ , isReg
+ , isField
  , _Fix
  , etype
  , ename
@@ -256,3 +260,15 @@ data AccessBehavior
  | ZeroSet
  | ZeroClear deriving (Show, Eq)
 
+isReg e   = e ^. _Fix . etype == Reg
+isField e = e ^. _Fix . etype == Field
+
+getElem :: (Fix ElabF -> Bool) -> Implementation -> Fix ElabF -> [Fix ElabF]
+getElem t fe e =
+    case (t e, fe == NotSpec || fe == e ^. _Fix . eext) of
+       (True, True)  -> [e]
+       (True, False) -> []
+       (False,    _) -> concatMap (getElem t fe) (e ^. _Fix . einst)
+
+getFields = getElem isField Internal
+getRegs   = getElem isReg   Internal

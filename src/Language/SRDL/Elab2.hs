@@ -121,7 +121,7 @@ modifyDefs prop rhs = mapM_ (\x -> lift (sprops . ix 0 . ix x . ix prop . pdefau
 getSize x =
  case x ^. _Fix . etype of
    Field -> 0
-   Reg   -> getNumProp "regwidth" x `div` 8
+   Reg   -> getNum x "regwidth" `div` 8
    _ -> case maximumByOf traverse (\x y -> compare (x ^. _Fix . eoffset) (y ^. _Fix . eoffset)) (x ^. _Fix . einst) of
                   Nothing -> 0
                   Just e -> e ^. _Fix . eoffset + getSize e

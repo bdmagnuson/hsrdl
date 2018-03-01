@@ -20,6 +20,7 @@ data Args = Args
   , outputDir :: String
   , svOutput  :: Bool
   , uvmOutput :: Bool
+  , htmlOutput :: Bool
   }
 
 doit :: Args -> IO ()
@@ -29,6 +30,7 @@ doit args = do
   where f (n, s) = do
              when (svOutput  args) $ writeVerilog s
              when (uvmOutput args) $ writeUVM     n s
+             when (htmlOutput args) $ writeHtml   s
 
 main :: IO ()
 main = doit =<< execParser (info opts fullDesc)
@@ -37,13 +39,7 @@ main = doit =<< execParser (info opts fullDesc)
                 <*> strOption (long "output" <> metavar "DIR" <> help "Output directory" <> value ".")
                 <*> switch (long "sv")
                 <*> switch (long "uvm")
-    fileOption = maybeReader (P.parseMaybe p)
-    p :: P.ParsecT (P.ErrorFancy Void) String Identity (String, String)
-    p = do
-       n <- some (L.alphaNumChar <|> L.char '_')
-       _ <- L.char ':'
-       f <- some (L.alphaNumChar <|> L.char '.' <|> L.char '_')
-       return (n, f)
+                <*> switch (long "html")
 
 
 

@@ -45,6 +45,10 @@ baseClass inst =
       Array   -> "array"
       _       -> error $ show  (inst ^. _Fix . etype)
 
+getNumProp = flip getNum
+getBoolProp = flip getBool
+getEnumProp = flip getEnum
+
 delim = foldl1' (\x y -> x <> ("_" :: Text) <> y) . tail
 sname i = pretty $ delim (i ^. _Fix . escope)
 

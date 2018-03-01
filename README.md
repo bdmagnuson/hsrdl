@@ -6,9 +6,10 @@ automatically generated along with consistant verification and sw collateral.
 
 The specification is available [here](http://www.accellera.org/images/downloads/standards/systemrdl/SystemRDL_2.0_Jan2018.pdf).
 
-The are two currently supported backends
+The are three currently supported backends
 * Verilog RTL
-* UVM Register Access Layer
+* UVM Register Access Layer (RAL)
+* HTML (very rudimentary so far)
 
 # Example #
 ```

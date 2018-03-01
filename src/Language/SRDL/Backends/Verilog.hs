@@ -43,55 +43,6 @@ makeLenses ''ExtInfo
 data RegsFilter = FilterInternal | FilterExternal | FilterNone
 
 
---getProp t e p =
---  case e ^? _Fix . eprops . ix p . _Just . t of
---    Just b -> b
---    _ -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, p)) (error "you dun f'd up")
---   where
---     a = e ^? _Fix . eprops . ix p . _Just
---
---getBool = getProp _PropBool
---getNum  = getProp _PropNum
---getEnum = getProp _PropEnum
---getIntr = getProp _PropIntr
---getRef  = getProp _PropRef
---getLit  = getProp _PropLit
-
-getAsLit e p =
-   case e ^? _Fix . eprops . ix p . _Just of
-      Nothing -> ""
-      Just (PropBool True) -> "1"
-      Just (PropBool False) -> "0"
-      Just (PropNum a) -> T.pack (show a)
-      Just (PropLit a) -> a
-      _ -> error "got a problem"
-
---Doing it this way yields a performance benefit
-getProp (Fix e) p = e ^. eprops . at p
-
-getBool e p = case getProp e p of
-                Just (Just (PropBool b)) -> b
-getNum  e p = case getProp e p of
-                Just (Just (PropNum b)) -> b
-getEnum e p = case getProp e p of
-                Just (Just (PropEnum b)) -> b
-getIntr e p = case getProp e p of
-                Just (Just (PropIntr a b)) -> (a, b)
-getLit e p = case getProp e p of
-                Just (Just (PropLit b)) -> b
---getRef e p = case getProp e p of
---                Just (Just (PropRef b)) -> b
-
-
-safeGetProp t e p = e ^? _Fix . eprops . ix p . _Just . t
-
-safeGetBool = safeGetProp _PropBool
-safeGetNum  = safeGetProp _PropNum
-safeGetEnum = safeGetProp _PropEnum
-safeGetIntr = safeGetProp _PropIntr
-safeGetRef  = safeGetProp _PropRef
-safeGetLit  = safeGetProp _PropLit
-
 data ExtTree a = Leaf ExtInfo | Node ExtInfo [a] deriving (Functor)
 
 filterExt :: Fix ElabF -> [ExtInfo]
@@ -175,6 +126,8 @@ array' 1 = toStrict ""
 array' w = toStrict $ renderMarkup [compileText|[#{w - 1}:0] |]
 arrayF f = array' (getNum f "fieldwidth")
 
+getNumProp = flip getNum
+
 footer ::  Text
 footer = toStrict $ renderMarkup [compileText|
 endmodule
@@ -223,7 +176,7 @@ always @(*) begin : _readMux
     case (1'b1)
 %{forall r <- rs}
        #{fn r}_acc : begin
-%{forall f <- getElem isField Internal r}
+%{forall f <- getFields r}
           _v_rdata[#{getNumProp "msb" f}:#{getNumProp "lsb" f}] = #{fn f};
 %{endforall}
        end
@@ -631,23 +584,11 @@ pushPostProp e = foldl' (.) id (map f $ e ^. _Fix . epostProps)
              _          -> setPostProp (t, prop, rhs)
 
 
-isReg e   = e ^. _Fix . etype == Reg
-isField e = e ^. _Fix . etype == Field
-
-
-getElem :: (Fix ElabF -> Bool) -> Implementation -> Fix ElabF -> [Fix ElabF]
-getElem t fe e =
-    case (t e, fe == NotSpec || fe == e ^. _Fix . eext) of
-       (True, True)  -> [e]
-       (True, False) -> []
-       (False,    _) -> concatMap (getElem t fe) (e ^. _Fix . einst)
-
-getFields = getElem isField NotSpec
 
 
 verilog x = P.vcat $ map pretty [header modName (addExt es io), wires io, readMux rs es, syncUpdate rs fs es, pretty2text (combUpdate rs), footer]
-   where rs = getElem isReg   Internal x''
-         fs = getElem isField Internal x''
+   where rs = getRegs x''
+         fs = getFields x''
          es = filterExt x'
          x'  = (pushPostProp . pushOffset 0) (evalState (fqName (pruneComp Addrmap x)) [])
          (x'', io) = runState (convertProps (pruneExt x')) initIO
@@ -657,11 +598,8 @@ verilog x = P.vcat $ map pretty [header modName (addExt es io), wires io, readMu
 pruneAST :: (Fix ElabF -> Bool) -> Fix ElabF -> Fix ElabF
 pruneAST p e = (e & _Fix . einst %~ filter p) & _Fix . einst . traverse %~ pruneAST p
 
-pruneComp :: CompType -> Fix ElabF -> Fix ElabF
 pruneComp t = pruneAST (\x -> x ^. _Fix . etype /= t)
-
-pruneExt :: Fix ElabF -> Fix ElabF
-pruneExt = pruneAST (\x -> x ^. _Fix . eext /= External)
+pruneExt    = pruneAST (\x -> x ^. _Fix . eext /= External)
 
 
 

@@ -13,14 +13,24 @@ module Language.SRDL.Props (
      , isPropActive
      , exMap
      , assignProp
-     , getNumProp
-     , getBoolProp
-     , getEnumProp
      , calcAccess
      , buildPropPath
      , buildPropTraversal
      , setPostProp
      , setProp
+
+     , getAsLit
+     , getBool
+     , getNum
+     , getEnum
+     , getIntr
+     , getLit
+     , safeGetBool
+     , safeGetNum
+     , safeGetEnum
+     , safeGetIntr
+     , safeGetRef
+     , safeGetLit
      ) where
 
 import qualified Data.Map.Strict as M
@@ -72,7 +82,7 @@ p_intr          = ("intr",          defNothing [PropIntrT])
 p_hw            = ("hw",            defEnum "r")
 p_sw            = ("sw",            defEnum "rw")
 p_name          = ("name",          defNothing [PropLitT])
-p_desc          = ("desc",          defNothing [PropLitT])
+p_desc          = ("desc",          defLit "desc")
 p_reset         = ("reset",         defNum 0)
 p_fieldwidth    = ("fieldwidth",    defNum 0)
 p_counter       = ("counter",       defFalse)
@@ -293,3 +303,54 @@ setPostProp :: (a ~ Fix ElabF) => (ReifiedTraversal a a a a, Text, PropRHS) -> F
 setPostProp (t, prop, rhs) e = e & runTraversal t . _Fix . eprops %~ assignProp prop rhs
 
 setProp n p e = e & _Fix . eprops %~ assignProp n p
+
+getProp t e p =
+  case e ^? _Fix . eprops . ix p . _Just . t of
+    Just b -> b
+    _ -> trace (show (e ^? _Fix . eprops . ix "fqname", show a, p)) (error "you dun f'd up")
+   where
+     a = e ^? _Fix . eprops . ix p . _Just
+
+getBool = getProp _PropBool
+getNum  = getProp _PropNum
+getEnum = getProp _PropEnum
+getIntr = getProp _PropIntr
+getRef  = getProp _PropRef
+getLit  = getProp _PropLit
+
+getAsLit e p =
+   case e ^? _Fix . eprops . ix p . _Just of
+      Nothing -> ""
+      Just (PropBool True) -> "1"
+      Just (PropBool False) -> "0"
+      Just (PropNum a) -> T.pack (show a)
+      Just (PropLit a) -> a
+      _ -> error "got a problem"
+
+--Doing it this way yields a performance benefit
+--getProp (Fix e) p = e ^. eprops . at p
+--
+--getBool e p = case getProp e p of
+--                Just (Just (PropBool b)) -> b
+--getNum  e p = case getProp e p of
+--                Just (Just (PropNum b)) -> b
+--getEnum e p = case getProp e p of
+--                Just (Just (PropEnum b)) -> b
+--getIntr e p = case getProp e p of
+--                Just (Just (PropIntr a b)) -> (a, b)
+--getLit e p = case getProp e p of
+--                Just (Just (PropLit b)) -> b
+--getRef e p = case getProp e p of
+--                Just (Just (PropRef b)) -> b
+
+
+safeGetProp t e p = e ^? _Fix . eprops . ix p . _Just . t
+
+safeGetBool = safeGetProp _PropBool
+safeGetNum  = safeGetProp _PropNum
+safeGetEnum = safeGetProp _PropEnum
+safeGetIntr = safeGetProp _PropIntr
+safeGetRef  = safeGetProp _PropRef
+safeGetLit  = safeGetProp _PropLit
+
+

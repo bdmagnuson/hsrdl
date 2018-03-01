@@ -2,6 +2,7 @@ module Language.SRDL
   ( readSRDL
   , writeVerilog
   , writeUVM
+  , writeHtml
   , SRDL
   ) where
 
@@ -19,6 +20,7 @@ import Language.SRDL.Parser
 import Language.SRDL.Elab2
 import Language.SRDL.Backends.UVM
 import Language.SRDL.Backends.Verilog
+import Language.SRDL.Backends.Html
 
 
 data SRDL = SRDL ElabState
@@ -45,4 +47,10 @@ writeVerilog (SRDL st) = mapM_ f maps
 
 writeUVM :: Text -> SRDL -> IO ()
 writeUVM n (SRDL st) = withFile (unpack n ++ "_regs_pkg.sv") WriteMode (flip hPutDoc (generateUVM n . getInstCache $ st))
+
+writeHtml :: SRDL -> IO ()
+writeHtml (SRDL st) = mapM_ f maps
+   where
+     maps = filter (\x -> x ^. _Fix . etype == Addrmap) (concatMap M.elems (getInstCache st))
+     f x = withFile (unpack ((x ^. _Fix . escope) !! 1) ++ "_regs.html") WriteMode (flip hPutStr (genHtml x))
 
