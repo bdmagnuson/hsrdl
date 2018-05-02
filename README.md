@@ -1,10 +1,10 @@
 # hsrdl
 
 hsrdl is a parser/generator for SRDL 1.0 register definition files.  The
-purpose of SRDL is do define hardware registers so that RTL can get be
+purpose of SRDL is to define hardware registers so that RTL can be
 automatically generated along with consistant verification and sw collateral.
 
-The specification is available [here](http://www.accellera.org/images/downloads/standards/systemrdl/SystemRDL_2.0_Jan2018.pdf).
+The specification is available [here](http://www.accellera.org/images/downloads/standards/systemrdl/SystemRDL_1.0.zip).
 
 The are three currently supported backends
 * Verilog RTL
